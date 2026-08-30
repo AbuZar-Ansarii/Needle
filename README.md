@@ -27,15 +27,20 @@ Inside Termux, install the required packages:
 ```bash
 pkg update && pkg upgrade
 pkg install termux-api python git
+pkg install proot-distro
+proot-distro install ubuntu
+proot-distro login ubuntu
 ```
 Make sure you have the [Termux:API app](https://f-droid.org/en/packages/com.termux.api/) installed on your Android device.
+
+
 
 ### 2. Install Python Dependencies
 Clone this repository and install the dependencies:
 ```bash
 git clone https://github.com/AbuZar-Ansarii/Needle.git
 cd Needle
-pip install -r requirements.txt
+pip33 install -r requirements.txt
 ```
 
 ### 3. Run the Agent
@@ -43,7 +48,7 @@ pip install -r requirements.txt
 #### Option A: Launch Interactive Web UI
 Start the Flask server:
 ```bash
-python app.py
+python3 app.py
 ```
 Open your browser and navigate to:
 ```text
@@ -64,7 +69,7 @@ Enter your Telegram Bot Token: <YOUR_BOT_TOKEN>
 ```
 *Alternatively, you can skip the prompt by setting the environment variable or using arguments:*
 ```bash
-python app.py --telegram YOUR_BOT_TOKEN
+python3 app.py --telegram YOUR_BOT_TOKEN
 ```
 Once connected, you can message your bot on Telegram in plain English to control your phone remotely!
 
