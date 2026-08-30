@@ -18,6 +18,12 @@ try:
 except ImportError:
     telebot = None
 
+# Try to import waitress for production WSGI serving
+try:
+    from waitress import serve
+except ImportError:
+    serve = None
+
 # Create Flask app
 app = Flask(__name__)
 
@@ -254,18 +260,21 @@ HTML_TEMPLATE = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Termux Agent Hub</title>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg-dark: #070913;
-            --panel-bg: rgba(18, 22, 45, 0.45);
-            --border-glass: rgba(255, 255, 255, 0.08);
-            --primary: #8b5cf6;
-            --primary-glow: rgba(139, 92, 246, 0.4);
-            --accent-cyan: #06b6d4;
+            --bg-dark: #090a0f;
+            --panel-bg: #11131e;
+            --border-subtle: rgba(255, 255, 255, 0.05);
+            --primary: #4f46e5;
+            --primary-light: #6366f1;
+            --primary-glow: rgba(79, 70, 229, 0.15);
+            --accent-cyan: #0891b2;
             --accent-green: #10b981;
-            --text-main: #f3f4f6;
-            --text-muted: #9ca3af;
+            --text-main: #f1f5f9;
+            --text-muted: #64748b;
+            --chat-bubble-agent: #161824;
+            --chat-bubble-user: #4f46e5;
         }
 
         * {
@@ -275,98 +284,97 @@ HTML_TEMPLATE = """
         }
 
         body {
-            font-family: 'Outfit', sans-serif;
+            font-family: 'Inter', sans-serif;
             background-color: var(--bg-dark);
             color: var(--text-main);
             min-height: 100vh;
             display: flex;
             flex-direction: column;
             overflow-x: hidden;
-            background-image: 
-                radial-gradient(circle at 10% 20%, rgba(139, 92, 246, 0.15) 0%, transparent 40%),
-                radial-gradient(circle at 90% 80%, rgba(6, 182, 212, 0.12) 0%, transparent 40%);
         }
 
         header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 1.5rem 2rem;
-            border-bottom: 1px solid var(--border-glass);
+            padding: 1.25rem 2rem;
+            border-bottom: 1px solid var(--border-subtle);
+            background: rgba(9, 10, 15, 0.85);
             backdrop-filter: blur(12px);
             position: sticky;
             top: 0;
             z-index: 10;
         }
 
-        .logo-container {
+        .header-left {
             display: flex;
             align-items: center;
             gap: 0.75rem;
         }
 
-        .logo-icon {
-            width: 2.2rem;
-            height: 2.2rem;
-            border-radius: 8px;
-            background: linear-gradient(135deg, var(--primary), var(--accent-cyan));
+        .logo-mark {
+            width: 1.8rem;
+            height: 1.8rem;
+            border-radius: 6px;
+            background: linear-gradient(135deg, var(--primary), var(--primary-light));
             display: flex;
             align-items: center;
             justify-content: center;
             font-weight: 700;
-            font-size: 1.2rem;
-            box-shadow: 0 0 15px var(--primary-glow);
+            font-size: 1rem;
+            color: #fff;
+            box-shadow: 0 0 10px var(--primary-glow);
         }
 
         .logo-text h1 {
-            font-size: 1.3rem;
+            font-size: 1.1rem;
             font-weight: 600;
-            letter-spacing: 0.5px;
-            background: linear-gradient(to right, #ffffff, #c084fc);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.2px;
+            color: #ffffff;
         }
 
-        .logo-text p {
-            font-size: 0.75rem;
+        .logo-text span {
+            font-size: 0.7rem;
             color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
 
-        .status-badge {
+        .status-container {
             display: flex;
             align-items: center;
             gap: 0.5rem;
-            background: rgba(16, 185, 129, 0.1);
-            border: 1px solid rgba(16, 185, 129, 0.2);
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-subtle);
             padding: 0.4rem 0.8rem;
             border-radius: 20px;
-            font-size: 0.8rem;
+            font-size: 0.75rem;
             font-weight: 500;
             color: var(--accent-green);
         }
 
         .status-dot {
-            width: 8px;
-            height: 8px;
+            width: 6px;
+            height: 6px;
             border-radius: 50%;
             background-color: var(--accent-green);
-            box-shadow: 0 0 10px var(--accent-green);
-            animation: pulse 2s infinite;
+            box-shadow: 0 0 8px var(--accent-green);
+            animation: pulse-dot 2s infinite;
         }
 
-        @keyframes pulse {
-            0% { transform: scale(0.9); opacity: 0.6; }
-            50% { transform: scale(1.15); opacity: 1; }
-            100% { transform: scale(0.9); opacity: 0.6; }
+        @keyframes pulse-dot {
+            0% { transform: scale(0.95); opacity: 0.6; }
+            50% { transform: scale(1.1); opacity: 1; }
+            100% { transform: scale(0.95); opacity: 0.6; }
         }
 
         main {
             display: grid;
-            grid-template-columns: 1.2fr 0.8fr;
-            gap: 2rem;
-            padding: 2rem;
+            grid-template-columns: 1.3fr 0.7fr;
+            gap: 1.5rem;
+            padding: 1.5rem;
             flex-grow: 1;
-            max-width: 1500px;
+            max-width: 1400px;
             margin: 0 auto;
             width: 100%;
         }
@@ -379,21 +387,33 @@ HTML_TEMPLATE = """
 
         .card {
             background: var(--panel-bg);
-            border: 1px solid var(--border-glass);
-            border-radius: 16px;
-            backdrop-filter: blur(20px);
-            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--border-subtle);
+            border-radius: 12px;
             display: flex;
             flex-direction: column;
             overflow: hidden;
-            height: calc(100vh - 160px);
+            height: calc(100vh - 120px);
         }
 
         /* Chat Panel Styles */
-        .chat-container {
+        .chat-layout {
             display: flex;
             flex-direction: column;
             height: 100%;
+        }
+
+        .chat-header {
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid var(--border-subtle);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .chat-header-title {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: #ffffff;
         }
 
         .chat-messages {
@@ -405,31 +425,32 @@ HTML_TEMPLATE = """
             gap: 1.25rem;
         }
 
-        /* Custom Scrollbar */
+        /* Custom Scrollbars */
         ::-webkit-scrollbar {
-            width: 6px;
+            width: 5px;
+            height: 5px;
         }
         ::-webkit-scrollbar-track {
             background: transparent;
         }
         ::-webkit-scrollbar-thumb {
-            background: rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.05);
             border-radius: 3px;
         }
         ::-webkit-scrollbar-thumb:hover {
-            background: rgba(255, 255, 255, 0.2);
+            background: rgba(255, 255, 255, 0.12);
         }
 
         .message {
-            max-width: 80%;
+            max-width: 85%;
             display: flex;
             flex-direction: column;
-            gap: 0.4rem;
-            animation: slideUp 0.3s ease-out;
+            gap: 0.3rem;
+            animation: fadeIn 0.25s ease-out;
         }
 
-        @keyframes slideUp {
-            from { transform: translateY(15px); opacity: 0; }
+        @keyframes fadeIn {
+            from { transform: translateY(8px); opacity: 0; }
             to { transform: translateY(0); opacity: 1; }
         }
 
@@ -439,31 +460,32 @@ HTML_TEMPLATE = """
 
         .message.agent {
             align-self: flex-start;
+            width: 100%;
         }
 
         .bubble {
-            padding: 1rem 1.25rem;
-            border-radius: 14px;
-            font-size: 0.95rem;
-            line-height: 1.5;
+            padding: 0.85rem 1.1rem;
+            border-radius: 10px;
+            font-size: 0.92rem;
+            line-height: 1.45;
         }
 
         .message.user .bubble {
-            background: linear-gradient(135deg, var(--primary), #7c3aed);
+            background-color: var(--chat-bubble-user);
             color: #ffffff;
             border-bottom-right-radius: 2px;
-            box-shadow: 0 4px 15px rgba(124, 58, 237, 0.25);
         }
 
         .message.agent .bubble {
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid var(--border-glass);
+            background-color: var(--chat-bubble-agent);
+            border: 1px solid var(--border-subtle);
             color: var(--text-main);
             border-bottom-left-radius: 2px;
+            width: 100%;
         }
 
         .meta-info {
-            font-size: 0.75rem;
+            font-size: 0.72rem;
             color: var(--text-muted);
             margin: 0 4px;
         }
@@ -474,121 +496,160 @@ HTML_TEMPLATE = """
 
         /* Agent reasoning details style */
         .reasoning-box {
-            margin-top: 0.5rem;
-            background: rgba(0, 0, 0, 0.2);
-            border-radius: 8px;
-            border-left: 3px solid var(--primary);
-            padding: 0.6rem 0.8rem;
-            font-size: 0.82rem;
-            color: #d1d5db;
+            margin-top: 0.65rem;
+            background: rgba(0, 0, 0, 0.15);
+            border-radius: 6px;
+            border-left: 2px solid var(--primary);
+            padding: 0.5rem 0.75rem;
+            font-size: 0.8rem;
+            color: #94a3b8;
         }
 
         .reasoning-title {
             font-weight: 600;
-            color: #c084fc;
-            margin-bottom: 0.25rem;
-            font-size: 0.75rem;
+            color: #a5b4fc;
+            margin-bottom: 0.2rem;
+            font-size: 0.7rem;
             text-transform: uppercase;
             letter-spacing: 0.5px;
             display: flex;
             align-items: center;
-            gap: 0.4rem;
+            gap: 0.35rem;
         }
 
         .confidence-indicator {
             display: flex;
             align-items: center;
             gap: 0.5rem;
-            font-size: 0.75rem;
-            margin-top: 0.4rem;
+            font-size: 0.72rem;
+            margin-top: 0.5rem;
             color: var(--text-muted);
         }
 
         .confidence-bar-outer {
-            width: 80px;
-            height: 5px;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 3px;
+            width: 60px;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 2px;
             overflow: hidden;
         }
 
         .confidence-bar-inner {
             height: 100%;
             background: linear-gradient(to right, var(--primary), var(--accent-cyan));
-            border-radius: 3px;
+            border-radius: 2px;
         }
 
-        .tool-execution-log {
-            margin-top: 0.5rem;
-            background: rgba(6, 182, 212, 0.05);
-            border: 1px dashed rgba(6, 182, 212, 0.2);
-            border-radius: 8px;
-            padding: 0.6rem 0.8rem;
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 0.8rem;
-        }
-
-        .tool-title {
-            color: var(--accent-cyan);
-            font-weight: 600;
-            margin-bottom: 0.25rem;
-            font-size: 0.75rem;
+        /* Formatted Tools UI */
+        .tool-results-container {
+            margin-top: 0.65rem;
             display: flex;
-            align-items: center;
-            gap: 0.4rem;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .tool-result-item {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-subtle);
+            border-radius: 6px;
+            padding: 0.6rem 0.8rem;
+            font-size: 0.85rem;
+            color: #cbd5e1;
+        }
+
+        .tool-icon {
+            margin-right: 0.4rem;
+        }
+
+        .tool-result-item ul {
+            margin-left: 1.25rem;
+            margin-top: 0.35rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .tool-result-item li {
+            font-size: 0.8rem;
+            color: #94a3b8;
+        }
+
+        /* Accordion for Raw JSON output */
+        details.raw-json-details {
+            margin-top: 0.5rem;
+            border-top: 1px dashed rgba(255, 255, 255, 0.05);
+            padding-top: 0.4rem;
+        }
+
+        details.raw-json-details summary {
+            font-size: 0.72rem;
+            color: var(--text-muted);
+            cursor: pointer;
+            outline: none;
+            user-select: none;
+            display: inline-block;
+        }
+
+        details.raw-json-details summary:hover {
+            color: var(--text-main);
+        }
+
+        details.raw-json-details pre {
+            margin-top: 0.4rem;
+            background: rgba(0, 0, 0, 0.25);
+            border-radius: 4px;
+            padding: 0.5rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.72rem;
+            color: #38bdf8;
+            overflow-x: auto;
+            max-height: 150px;
         }
 
         .chat-input-area {
-            padding: 1.25rem;
-            border-top: 1px solid var(--border-glass);
+            padding: 1.25rem 1.5rem;
+            border-top: 1px solid var(--border-subtle);
             display: flex;
             gap: 0.75rem;
-            background: rgba(10, 12, 28, 0.6);
+            background: rgba(14, 16, 27, 0.4);
         }
 
         .chat-input {
             flex-grow: 1;
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid var(--border-glass);
-            border-radius: 10px;
-            padding: 0.8rem 1rem;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border-subtle);
+            border-radius: 8px;
+            padding: 0.75rem 1rem;
             color: var(--text-main);
             font-family: inherit;
-            font-size: 0.95rem;
+            font-size: 0.9rem;
             outline: none;
-            transition: all 0.2s;
+            transition: all 0.15s;
         }
 
         .chat-input:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 10px rgba(139, 92, 246, 0.2);
-            background: rgba(255, 255, 255, 0.08);
+            border-color: var(--primary-light);
+            background: rgba(255, 255, 255, 0.05);
         }
 
-        .send-button {
+        .send-btn {
             background: var(--primary);
             color: #ffffff;
             border: none;
-            border-radius: 10px;
-            padding: 0 1.5rem;
+            border-radius: 8px;
+            padding: 0 1.25rem;
             font-weight: 500;
+            font-size: 0.85rem;
             cursor: pointer;
-            transition: all 0.2s;
-            box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+            transition: all 0.15s;
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 0.5rem;
+            gap: 0.4rem;
         }
 
-        .send-button:hover {
-            background: #7c3aed;
-            transform: translateY(-1px);
-            box-shadow: 0 6px 16px rgba(139, 92, 246, 0.45);
-        }
-
-        .send-button:active {
-            transform: translateY(0);
+        .send-btn:hover {
+            background: var(--primary-light);
         }
 
         /* Right Panel: Tools and Logs */
@@ -598,193 +659,215 @@ HTML_TEMPLATE = """
             flex-direction: column;
             gap: 1.5rem;
             overflow-y: auto;
+            height: 100%;
         }
 
-        .section-title {
-            font-size: 1rem;
+        .panel-section-title {
+            font-size: 0.82rem;
             font-weight: 600;
-            color: #ffffff;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.75px;
+            margin-bottom: 0.75rem;
             display: flex;
             align-items: center;
-            gap: 0.5rem;
-            margin-bottom: 0.75rem;
-            border-bottom: 1px solid var(--border-glass);
-            padding-bottom: 0.5rem;
+            gap: 0.4rem;
         }
 
-        .section-title svg {
-            width: 1.1rem;
-            height: 1.1rem;
-            color: var(--primary);
+        .panel-section-title svg {
+            width: 1rem;
+            height: 1rem;
+            color: var(--primary-light);
         }
 
-        .quick-triggers {
+        .triggers-grid {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
-            gap: 0.75rem;
+            gap: 0.6rem;
         }
 
-        .trigger-btn {
-            background: rgba(255, 255, 255, 0.03);
-            border: 1px solid var(--border-glass);
-            border-radius: 10px;
+        .trigger-card {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-subtle);
+            border-radius: 8px;
             padding: 0.75rem;
             font-family: inherit;
             color: var(--text-main);
-            font-size: 0.82rem;
+            font-size: 0.8rem;
             font-weight: 500;
             text-align: left;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all 0.15s;
             display: flex;
             flex-direction: column;
-            gap: 0.25rem;
+            gap: 0.15rem;
         }
 
-        .trigger-btn:hover {
-            background: rgba(255, 255, 255, 0.08);
-            border-color: var(--primary);
-            box-shadow: 0 4px 12px rgba(139, 92, 246, 0.1);
+        .trigger-card:hover {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: var(--primary-light);
         }
 
-        .trigger-btn span.tag {
-            font-size: 0.7rem;
+        .trigger-card span.tag-label {
+            font-size: 0.65rem;
             color: var(--text-muted);
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }
 
-        .live-log-container {
-            background: rgba(0, 0, 0, 0.4);
-            border: 1px solid var(--border-glass);
-            border-radius: 10px;
-            padding: 1rem;
+        .terminal-container {
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--border-subtle);
+            border-radius: 8px;
+            padding: 0.85rem;
             font-family: 'JetBrains Mono', monospace;
-            font-size: 0.8rem;
-            line-height: 1.6;
-            color: #34d399;
+            font-size: 0.75rem;
+            line-height: 1.5;
+            color: #10b981;
             flex-grow: 1;
             overflow-y: auto;
             max-height: 350px;
-            min-height: 150px;
+            min-height: 200px;
         }
 
-        .log-line {
-            margin-bottom: 0.4rem;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.02);
-            padding-bottom: 0.25rem;
+        .log-row {
+            margin-bottom: 0.35rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.01);
+            padding-bottom: 0.2rem;
+            word-break: break-all;
         }
 
-        .log-time {
+        .log-time-prefix {
             color: var(--text-muted);
-            margin-right: 0.5rem;
+            margin-right: 0.4rem;
         }
 
-        .loading-dots {
+        .loading-animation {
             display: inline-flex;
-            gap: 3px;
+            gap: 2px;
             align-items: center;
         }
 
-        .loading-dots div {
-            width: 6px;
-            height: 6px;
+        .loading-animation div {
+            width: 4px;
+            height: 4px;
             background-color: var(--text-muted);
             border-radius: 50%;
-            animation: bounce 1.4s infinite ease-in-out both;
+            animation: wave 1.2s infinite ease-in-out both;
         }
 
-        .loading-dots div:nth-child(1) { animation-delay: -0.32s; }
-        .loading-dots div:nth-child(2) { animation-delay: -0.16s; }
+        .loading-animation div:nth-child(1) { animation-delay: -0.3s; }
+        .loading-animation div:nth-child(2) { animation-delay: -0.15s; }
 
-        @keyframes bounce {
-            0%, 80%, 100% { transform: scale(0); }
-            40% { transform: scale(1.0); }
+        @keyframes wave {
+            0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+            40% { transform: scale(1.2); opacity: 1; }
         }
     </style>
 </head>
 <body>
     <header>
-        <div class="logo-container">
-            <div class="logo-icon">▲</div>
+        <div class="header-left">
+            <div class="logo-mark">▲</div>
             <div class="logo-text">
                 <h1>Termux Agent Hub</h1>
-                <p>Needle 14MB Core v2.0</p>
+                <span>Needle 14MB Core v2.0</span>
             </div>
         </div>
-        <div class="status-badge">
+        <div class="status-container">
             <div class="status-dot"></div>
-            <span>AGENT ACTIVE</span>
+            <span>Online</span>
         </div>
     </header>
 
     <main>
-        <!-- Left Column: Chat Container -->
+        <!-- Left Panel: Chat Interface -->
         <div class="card">
-            <div class="chat-container">
+            <div class="chat-layout">
+                <div class="chat-header">
+                    <div class="chat-header-title">Agent Console</div>
+                    <div class="meta-info" style="font-size:0.75rem;">Local Session</div>
+                </div>
+                
                 <div class="chat-messages" id="chatMessages">
                     <div class="message agent">
                         <div class="bubble">
-                            Hello! I am your agentic assistant connected to the Termux API. You can ask me to control device hardware, retrieve status logs, speak text, or trigger notifications. What should I do?
+                            Welcome. I am the local agentic runtime powered by Needle. Provide any system instructions, device actions, or query commands in natural language.
                         </div>
-                        <div class="meta-info">System • Agent Core</div>
+                        <div class="meta-info">Agent Core • System</div>
                     </div>
                 </div>
                 
                 <div class="chat-input-area">
-                    <input type="text" class="chat-input" id="chatInput" placeholder="Send a message/command..." autocomplete="off">
-                    <button class="send-button" id="sendBtn">
-                        <span>Send</span>
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                    <input type="text" class="chat-input" id="chatInput" placeholder="Enter command or action..." autocomplete="off">
+                    <button class="send-btn" id="sendBtn">
+                        <span>Execute</span>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
                     </button>
                 </div>
             </div>
         </div>
 
-        <!-- Right Column: Control & Dashboard Panel -->
+        <!-- Right Panel: Diagnostics & Actions -->
         <div class="card" style="height: auto;">
             <div class="dashboard-panel">
                 <div>
-                    <h2 class="section-title">
+                    <h2 class="panel-section-title">
                         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-                        Quick Commands
+                        Device Control Triggers
                     </h2>
-                    <div class="quick-triggers">
-                        <button class="trigger-btn" onclick="submitCommand('Check battery status')">
-                            <span class="tag">System</span>
-                            <strong>Battery Level</strong>
+                    <div class="triggers-grid">
+                        <button class="trigger-card" onclick="submitCommand('Check phone battery status')">
+                            <span class="tag-label">System</span>
+                            <strong>Battery Status</strong>
                         </button>
-                        <button class="trigger-btn" onclick="submitCommand('Vibrate device for 1 second')">
-                            <span class="tag">Hardware</span>
-                            <strong>Vibrate Phone</strong>
+                        <button class="trigger-card" onclick="submitCommand('Vibrate the phone for 500ms')">
+                            <span class="tag-label">Hardware</span>
+                            <strong>Haptic Vibrate</strong>
                         </button>
-                        <button class="trigger-btn" onclick="submitCommand('Turn on the flashlight')">
-                            <span class="tag">Hardware</span>
-                            <strong>Toggle Torch ON</strong>
+                        <button class="trigger-card" onclick="submitCommand('Turn on the camera flashlight')">
+                            <span class="tag-label">Hardware</span>
+                            <strong>Torch ON</strong>
                         </button>
-                        <button class="trigger-btn" onclick="submitCommand('Turn off the flashlight')">
-                            <span class="tag">Hardware</span>
-                            <strong>Toggle Torch OFF</strong>
+                        <button class="trigger-card" onclick="submitCommand('Turn off the camera flashlight')">
+                            <span class="tag-label">Hardware</span>
+                            <strong>Torch OFF</strong>
                         </button>
-                        <button class="trigger-btn" onclick="submitCommand('What Wi-Fi network are you connected to?')">
-                            <span class="tag">Network</span>
+                        <button class="trigger-card" onclick="submitCommand('What Wi-Fi network are you connected to?')">
+                            <span class="tag-label">Network</span>
                             <strong>Wi-Fi Details</strong>
                         </button>
-                        <button class="trigger-btn" onclick="submitCommand('Show a toast saying Agent Loaded!')">
-                            <span class="tag">Display</span>
+                        <button class="trigger-card" onclick="submitCommand('Get phone GPS location coordinates')">
+                            <span class="tag-label">Location</span>
+                            <strong>GPS Coordinates</strong>
+                        </button>
+                        <button class="trigger-card" onclick="submitCommand('List phone contacts')">
+                            <span class="tag-label">Data</span>
+                            <strong>Contacts List</strong>
+                        </button>
+                        <button class="trigger-card" onclick="submitCommand('Retrieve last 5 text messages')">
+                            <span class="tag-label">Messages</span>
+                            <strong>Inbox SMS</strong>
+                        </button>
+                        <button class="trigger-card" onclick="submitCommand('Take a camera photo')">
+                            <span class="tag-label">Camera</span>
+                            <strong>Capture Photo</strong>
+                        </button>
+                        <button class="trigger-card" onclick="submitCommand('Show a toast saying Agent Runtime Online!')">
+                            <span class="tag-label">Alert</span>
                             <strong>Trigger Toast</strong>
                         </button>
                     </div>
                 </div>
 
                 <div style="flex-grow: 1; display: flex; flex-direction: column;">
-                    <h2 class="section-title">
+                    <h2 class="panel-section-title">
                         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-                        Terminal Event Logs
+                        Terminal Output Monitor
                     </h2>
-                    <div class="live-log-container" id="terminalLogs">
-                        <div class="log-line"><span class="log-time">[System]</span> Terminal initialized. Simulator active.</div>
-                        <div class="log-line"><span class="log-time">[System]</span> Local model (14MB) bound and listening.</div>
+                    <div class="terminal-container" id="terminalLogs">
+                        <div class="log-row"><span class="log-time-prefix">[System]</span> Production WSGI server active.</div>
+                        <div class="log-row"><span class="log-time-prefix">[System]</span> Loaded Needle local model (14MB).</div>
                     </div>
                 </div>
             </div>
@@ -798,93 +881,149 @@ HTML_TEMPLATE = """
         const terminalLogs = document.getElementById('terminalLogs');
 
         function appendLog(tag, message) {
-            const line = document.createElement('div');
-            line.className = 'log-line';
-            const timeStr = new Date().toLocaleTimeString();
-            line.innerHTML = `<span class="log-time">[${timeStr}][${tag}]</span> ${message}`;
-            terminalLogs.appendChild(line);
+            const row = document.createElement('div');
+            row.className = 'log-row';
+            const time = new Date().toLocaleTimeString();
+            row.innerHTML = `<span class="log-time-prefix">[${time}][${tag}]</span> ${message}`;
+            terminalLogs.appendChild(row);
             terminalLogs.scrollTop = terminalLogs.scrollHeight;
         }
 
-        async function submitCommand(text) {
-            if (!text.strip) {
-                text = text.trim();
+        // Custom parser for rendering pretty tool outputs in chat bubbles
+        function formatToolResult(res) {
+            if (!res) return '';
+            if (typeof res === 'string') {
+                return `<div class="tool-result-item"><span class="tool-icon">⚡</span> ${res}</div>`;
             }
+            if (res.percentage !== undefined) {
+                return `
+                    <div class="tool-result-item">
+                        <span class="tool-icon">🔋</span> 
+                        <strong>Battery Status:</strong> ${res.percentage}% (${res.status}, Temp: ${res.temperature}°C, Health: ${res.health})
+                    </div>
+                `;
+            }
+            if (res.ssid !== undefined) {
+                return `
+                    <div class="tool-result-item">
+                        <span class="tool-icon">📶</span> 
+                        <strong>Wi-Fi Details:</strong> Connected to "${res.ssid}" (IP: ${res.ip}, RSSI: ${res.rssi}dBm)
+                    </div>
+                `;
+            }
+            if (res.latitude !== undefined) {
+                return `
+                    <div class="tool-result-item">
+                        <span class="tool-icon">📍</span> 
+                        <strong>GPS Location:</strong> Latitude: ${res.latitude.toFixed(5)}, Longitude: ${res.longitude.toFixed(5)} (Altitude: ${res.altitude}m)
+                    </div>
+                `;
+            }
+            if (Array.isArray(res)) {
+                if (res.length === 0) {
+                    return `<div class="tool-result-item"><span class="tool-icon">📁</span> <strong>List Output:</strong> Empty list returned.</div>`;
+                }
+                if (res[0].address !== undefined) {
+                    // SMS list
+                    let html = `<div class="tool-result-item"><span class="tool-icon">✉️</span> <strong>Recent SMS Inbox:</strong><ul>`;
+                    res.forEach(sms => {
+                        html += `<li><strong>${sms.address}</strong>: "${sms.body}" <span class="meta-info">(${sms.date})</span></li>`;
+                    });
+                    html += `</ul></div>`;
+                    return html;
+                }
+                if (res[0].name !== undefined) {
+                    // Contacts list
+                    let html = `<div class="tool-result-item"><span class="tool-icon">👤</span> <strong>Contacts Found:</strong><ul>`;
+                    res.forEach(c => {
+                        html += `<li><strong>${c.name}</strong>: ${c.number}</li>`;
+                    });
+                    html += `</ul></div>`;
+                    return html;
+                }
+            }
+            // Standard JSON fallback
+            return `
+                <div class="tool-result-item">
+                    <span class="tool-icon">⚙️</span> <strong>System Output:</strong>
+                    <pre style="font-family: inherit; font-size: 0.75rem; margin-top: 0.25rem;">${JSON.stringify(res, null, 2)}</pre>
+                </div>
+            `;
+        }
+
+        async function submitCommand(text) {
+            text = text.trim();
             if (!text) return;
 
-            // 1. Append User Message
-            const userMsgDiv = document.createElement('div');
-            userMsgDiv.className = 'message user';
-            userMsgDiv.innerHTML = `
+            // User message bubble
+            const userDiv = document.createElement('div');
+            userDiv.className = 'message user';
+            userDiv.innerHTML = `
                 <div class="bubble">${text}</div>
                 <div class="meta-info">You</div>
             `;
-            chatMessages.appendChild(userMsgDiv);
+            chatMessages.appendChild(userDiv);
             chatMessages.scrollTop = chatMessages.scrollHeight;
 
-            // 2. Append Loading Placeholder for Agent
-            const agentLoadingDiv = document.createElement('div');
-            agentLoadingDiv.className = 'message agent';
-            agentLoadingDiv.id = 'agentLoading';
-            agentLoadingDiv.innerHTML = `
+            // Loading state bubble
+            const loadingDiv = document.createElement('div');
+            loadingDiv.className = 'message agent';
+            loadingDiv.innerHTML = `
                 <div class="bubble">
-                    Thinking <div class="loading-dots"><div></div><div></div><div></div></div>
+                    Executing <div class="loading-animation"><div></div><div></div><div></div></div>
                 </div>
             `;
-            chatMessages.appendChild(agentLoadingDiv);
+            chatMessages.appendChild(loadingDiv);
             chatMessages.scrollTop = chatMessages.scrollHeight;
 
-            appendLog('User', `Requested: "${text}"`);
+            appendLog('User', `Executing: "${text}"`);
 
             try {
-                // 3. Make Fetch Call
                 const response = await fetch('/api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ message: text })
                 });
-                
-                const data = await response.json();
-                
-                // Remove Loading Placeholder
-                agentLoadingDiv.remove();
 
-                // 4. Construct Agent Message HTML
-                const agentMsgDiv = document.createElement('div');
-                agentMsgDiv.className = 'message agent';
+                const data = await response.json();
+                loadingDiv.remove();
+
+                const agentDiv = document.createElement('div');
+                agentDiv.className = 'message agent';
 
                 let bubbleContent = '';
                 if (data.type === 'respond' || data.type === 'call') {
                     if (data.results && data.results.length > 0) {
-                        bubbleContent += `<p>I've run the requested device tools:</p>`;
+                        bubbleContent += `<div class="tool-results-container">`;
                         data.results.forEach((res, i) => {
+                            bubbleContent += formatToolResult(res);
+                            
+                            // Collapsible details for raw JSON
                             if (typeof res === 'object') {
-                                bubbleContent += `<div class="tool-execution-log">
-                                    <div class="tool-title">⚡ Tool Result [${i+1}]</div>
-                                    <pre style="white-space: pre-wrap; font-size: 0.75rem;">${JSON.stringify(res, null, 2)}</pre>
-                                </div>`;
-                            } else {
-                                bubbleContent += `<div class="tool-execution-log">
-                                    <div class="tool-title">⚡ Tool Result [${i+1}]</div>
-                                    <p>${res}</p>
-                                </div>`;
+                                bubbleContent += `
+                                    <details class="raw-json-details">
+                                        <summary>View raw JSON</summary>
+                                        <pre>${JSON.stringify(res, null, 2)}</pre>
+                                    </details>
+                                `;
                             }
                         });
+                        bubbleContent += `</div>`;
                     } else {
-                        bubbleContent += `<p>No tools were matched or executed. I was unable to translate this command to a Termux action.</p>`;
+                        bubbleContent += `<p style="color: var(--text-muted);">No matching tools were executed. Please rephrase the command.</p>`;
                     }
                 } else {
-                    bubbleContent += `<p>Error occurred during parsing: ${data.error || 'Unknown error'}</p>`;
+                    bubbleContent += `<p style="color: #ef4444;">Runtime execution failure: ${data.error || 'Unknown error'}</p>`;
                 }
 
-                // Add reasoning box if available
+                // Add reasoning
                 let reasoningHtml = '';
                 if (data.reasoning) {
                     reasoningHtml = `
                         <div class="reasoning-box">
                             <div class="reasoning-title">
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>
-                                Agent Reasoning
+                                <svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path></svg>
+                                reasoning
                             </div>
                             <p>${data.reasoning}</p>
                         </div>
@@ -905,7 +1044,7 @@ HTML_TEMPLATE = """
                     `;
                 }
 
-                agentMsgDiv.innerHTML = `
+                agentDiv.innerHTML = `
                     <div class="bubble">
                         ${bubbleContent}
                         ${reasoningHtml}
@@ -914,25 +1053,24 @@ HTML_TEMPLATE = """
                     <div class="meta-info">Agent</div>
                 `;
 
-                chatMessages.appendChild(agentMsgDiv);
+                chatMessages.appendChild(agentDiv);
                 chatMessages.scrollTop = chatMessages.scrollHeight;
 
-                // Log the execution to terminal monitor
                 if (data.results && data.results.length > 0) {
-                    appendLog('Agent', `Successfully called ${data.results.length} action(s).`);
+                    appendLog('Agent', `Executed ${data.results.length} action(s).`);
                 } else {
-                    appendLog('Agent', `No actions executed (Reason: "${data.reasoning || 'Low confidence'}").`);
+                    appendLog('Agent', `No actions run (Reasoning: "${data.reasoning || 'Low confidence'}").`);
                 }
 
             } catch (err) {
-                agentLoadingDiv.remove();
+                loadingDiv.remove();
                 const errDiv = document.createElement('div');
                 errDiv.className = 'message agent';
                 errDiv.innerHTML = `
                     <div class="bubble" style="color: #ef4444;">
-                        Failed to connect to agent server. Ensure the Flask server is running.
+                        Failed to connect to agent server. Check connection.
                     </div>
-                    <div class="meta-info">System Error</div>
+                    <div class="meta-info">Runtime Error</div>
                 `;
                 chatMessages.appendChild(errDiv);
                 chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -1042,8 +1180,8 @@ if __name__ == "__main__":
         if arg == "--telegram" and idx + 1 < len(sys.argv):
             telegram_token = sys.argv[idx + 1]
 
-    # If no token is provided, ask the user interactively
-    if not telegram_token:
+    # If no token is provided, ask the user interactively (only if stdin is a TTY)
+    if not telegram_token and sys.stdin.isatty():
         try:
             choice = input("Do you want to use Telegram remote control? (yes/no): ").strip().lower()
             if choice in ("y", "yes"):
@@ -1054,6 +1192,8 @@ if __name__ == "__main__":
                     print("No token entered. Proceeding without Telegram.")
         except (KeyboardInterrupt, EOFError):
             print("\nNon-interactive mode or prompt skipped. Proceeding without Telegram.")
+    elif not telegram_token:
+        print("[Telegram] Non-interactive environment detected. Skipping prompt, proceeding without Telegram.")
 
     if telegram_token:
         print("[Telegram] Token provided. Launching bot background thread...")
@@ -1063,4 +1203,9 @@ if __name__ == "__main__":
         print("[Telegram] Info: Remote Telegram control disabled.")
 
     # Run server on port 5000 (accessible on local network/phone browser)
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    if serve:
+        print("[Server] Starting production WSGI server via Waitress on http://0.0.0.0:5000...")
+        serve(app, host="0.0.0.0", port=5000)
+    else:
+        print("[Server] Warning: Waitress not found. Falling back to Flask dev server.")
+        app.run(host="0.0.0.0", port=5000, debug=True)
