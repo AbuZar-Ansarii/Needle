@@ -40,7 +40,7 @@ Clone this repository and install the dependencies:
 ```bash
 git clone https://github.com/AbuZar-Ansarii/Needle.git
 cd Needle
-pip33 install -r requirements.txt
+pip3 install -r requirements.txt
 ```
 
 ### 3. Run the Agent
