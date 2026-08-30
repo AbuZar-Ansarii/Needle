@@ -385,6 +385,32 @@ HTML_TEMPLATE = """
             }
         }
 
+        @media (max-width: 768px) {
+            main {
+                padding: 0.75rem;
+                gap: 1rem;
+            }
+            header {
+                padding: 1rem;
+            }
+            .card {
+                height: 550px; /* Limit height of chat container on mobile so triggers are easily scrollable underneath */
+            }
+            .triggers-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            .terminal-container {
+                max-height: 200px;
+                min-height: 150px;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .triggers-grid {
+                grid-template-columns: 1fr; /* Single column on tiny phones for tap comfort */
+            }
+        }
+
         .card {
             background: var(--panel-bg);
             border: 1px solid var(--border-subtle);
