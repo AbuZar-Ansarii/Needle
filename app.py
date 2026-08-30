@@ -86,6 +86,23 @@ def run_cmd(args):
                 "rssi": -48,
                 "supplicant_state": "COMPLETED"
             })
+        elif cmd == "termux-camera-photo":
+            filename = args[3] if len(args) > 3 else "photo.jpg"
+            return f"[Simulated Camera] Photo captured and saved to: {filename}"
+        elif cmd == "termux-sms-list":
+            return json.dumps([
+                {"address": "+1234567890", "body": "Hey there! How is it going?", "date": "2026-08-30 12:00:00", "read": True, "type": "inbox"},
+                {"address": "OTP-BANK", "body": "Your bank OTP is 582103.", "date": "2026-08-30 11:45:00", "read": False, "type": "inbox"}
+            ])
+        elif cmd == "termux-contact-list":
+            return json.dumps([
+                {"name": "Alice Smith", "number": "+1987654321"},
+                {"name": "Bob Jones", "number": "+15550199"}
+            ])
+        elif cmd == "termux-download":
+            title = args[2] if len(args) > 2 else "Download"
+            url = args[3] if len(args) > 3 else ""
+            return f"[Simulated Download] Downloading URL: {url} as '{title}'"
         else:
             return f"[Simulated Action] Executed command: {' '.join(args)}"
 
@@ -179,6 +196,39 @@ def get_wifi_info():
         return res
 
 
+@needle.tool
+def take_camera_photo(camera_id: int = 0, filename: str = "photo.jpg"):
+    """Capture a photo using the phone's front (1) or back (0) camera and save it."""
+    print(f"[Agent Triggered Tool] take_camera_photo(camera_id={camera_id}, filename='{filename}')")
+    return run_cmd(["termux-camera-photo", "-c", str(camera_id), filename])
+
+@needle.tool
+def get_sms_messages(limit: int = 5):
+    """Retrieve a list of recent incoming SMS text messages from the phone."""
+    print(f"[Agent Triggered Tool] get_sms_messages(limit={limit})")
+    res = run_cmd(["termux-sms-list", "-l", str(limit)])
+    try:
+        return json.loads(res)
+    except Exception:
+        return res
+
+@needle.tool
+def get_contacts():
+    """Retrieve the phone's contact list (names and phone numbers)."""
+    print("[Agent Triggered Tool] get_contacts()")
+    res = run_cmd(["termux-contact-list"])
+    try:
+        return json.loads(res)
+    except Exception:
+        return res
+
+@needle.tool
+def download_file(url: str, title: str = "Download"):
+    """Download a file from a URL using the system's download manager."""
+    print(f"[Agent Triggered Tool] download_file(url='{url}', title='{title}')")
+    return run_cmd(["termux-download", "-t", title, url])
+
+
 # ----------------------------------------------------------------------
 # Initialize the Needle Agent
 # ----------------------------------------------------------------------
@@ -187,7 +237,8 @@ tools_list = [
     show_toast, show_notification, get_battery_status, 
     text_to_speech, set_clipboard, get_clipboard, 
     vibrate_device, set_torch, get_location, 
-    send_sms, make_phone_call, get_wifi_info
+    send_sms, make_phone_call, get_wifi_info,
+    take_camera_photo, get_sms_messages, get_contacts, download_file
 ]
 agent = needle.Needle(tools=tools_list)
 print("Needle model active and ready!")

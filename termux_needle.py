@@ -115,6 +115,39 @@ def get_wifi_info():
         return res
 
 
+@needle.tool
+def take_camera_photo(camera_id: int = 0, filename: str = "photo.jpg"):
+    """Capture a photo using the phone's front (1) or back (0) camera and save it."""
+    print(f"-> Calling Tool: take_camera_photo(camera_id={camera_id}, filename='{filename}')")
+    return run_cmd(["termux-camera-photo", "-c", str(camera_id), filename])
+
+@needle.tool
+def get_sms_messages(limit: int = 5):
+    """Retrieve a list of recent incoming SMS text messages from the phone."""
+    print(f"-> Calling Tool: get_sms_messages(limit={limit})")
+    res = run_cmd(["termux-sms-list", "-l", str(limit)])
+    try:
+        return json.loads(res)
+    except Exception:
+        return res
+
+@needle.tool
+def get_contacts():
+    """Retrieve the phone's contact list (names and phone numbers)."""
+    print("-> Calling Tool: get_contacts()")
+    res = run_cmd(["termux-contact-list"])
+    try:
+        return json.loads(res)
+    except Exception:
+        return res
+
+@needle.tool
+def download_file(url: str, title: str = "Download"):
+    """Download a file from a URL using the system's download manager."""
+    print(f"-> Calling Tool: download_file(url='{url}', title='{title}')")
+    return run_cmd(["termux-download", "-t", title, url])
+
+
 # ----------------------------------------------------------------------
 # Main Execution Loop
 # ----------------------------------------------------------------------
@@ -132,7 +165,8 @@ def main():
             show_toast, show_notification, get_battery_status, 
             text_to_speech, set_clipboard, get_clipboard, 
             vibrate_device, set_torch, get_location, 
-            send_sms, make_phone_call, get_wifi_info
+            send_sms, make_phone_call, get_wifi_info,
+            take_camera_photo, get_sms_messages, get_contacts, download_file
         ]
         agent = needle.Needle(tools=tools)
         print("Needle model loaded successfully!")

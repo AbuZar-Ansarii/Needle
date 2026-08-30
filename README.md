@@ -80,3 +80,7 @@ Once connected, you can message your bot on Telegram in plain English to control
 - **Clipboard Management:** *"copy Hello World to clipboard"* / *"what's on my clipboard?"*
 - **Wi-Fi Information:** *"what network is the phone connected to?"*
 - **Call & SMS:** *"call +1234567"* / *"send sms to +1234567 saying Hello"*
+- **Camera Access:** *"take a photo using back camera"* / *"capture front camera photo"*
+- **SMS Reading:** *"get my last 5 text messages"*
+- **Contacts:** *"list my contacts"*
+- **Downloads:** *"download file from https://example.com/file.zip"*
