@@ -156,6 +156,17 @@ def download_file(url: str, title: str = "Download"):
     return run_cmd(["termux-download", "-t", title, url])
 
 
+def preprocess_query(query: str) -> str:
+    query_stripped = query.strip()
+    query_lower = query_stripped.lower()
+    for verb in ["speak ", "say "]:
+        if query_lower.startswith(verb):
+            text_part = query_stripped[len(verb):].strip()
+            if not ((text_part.startswith('"') and text_part.endswith('"')) or 
+                    (text_part.startswith("'") and text_part.endswith("'"))):
+                return f'{verb.strip()} "{text_part}"'
+    return query_stripped
+
 # ----------------------------------------------------------------------
 # Main Execution Loop
 # ----------------------------------------------------------------------
@@ -199,8 +210,10 @@ def main():
                 break
             
             print("Processing command...")
+            # Preprocess query to wrap speech commands in quotes for correct parsing by Needle LLM
+            processed_query = preprocess_query(query)
             # Run the agentic loop
-            res = agent.run(query)
+            res = agent.run(processed_query)
             
             # Print execution metrics and response details
             print(f"Reasoning: {res.get('reasoning')}")

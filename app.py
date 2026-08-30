@@ -1130,6 +1130,17 @@ HTML_TEMPLATE = """
 </html>
 """
 
+def preprocess_query(query: str) -> str:
+    query_stripped = query.strip()
+    query_lower = query_stripped.lower()
+    for verb in ["speak ", "say "]:
+        if query_lower.startswith(verb):
+            text_part = query_stripped[len(verb):].strip()
+            if not ((text_part.startswith('"') and text_part.endswith('"')) or 
+                    (text_part.startswith("'") and text_part.endswith("'"))):
+                return f'{verb.strip()} "{text_part}"'
+    return query_stripped
+
 # ----------------------------------------------------------------------
 # Routes
 # ----------------------------------------------------------------------
@@ -1146,8 +1157,10 @@ def chat_api():
         if not user_message:
             return jsonify({"type": "error", "error": "Empty message parameter"}), 400
         
+        # Preprocess query to wrap speech commands in quotes for correct parsing by Needle LLM
+        processed_message = preprocess_query(user_message)
         # Invoke Needle model agent loop
-        res = agent.run(user_message)
+        res = agent.run(processed_message)
         
         return jsonify({
             "query": user_message,
@@ -1177,7 +1190,8 @@ def start_telegram_bot(token):
             if not query:
                 return
             try:
-                res = agent.run(query)
+                processed_query = preprocess_query(query)
+                res = agent.run(processed_query)
                 reasoning = res.get("reasoning", "")
                 confidence = res.get("confidence")
                 results = res.get("results") or []
