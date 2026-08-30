@@ -35,11 +35,19 @@ Make sure you have the [Termux:API app](https://f-droid.org/en/packages/com.term
 
 
 
-### 2. Install Python Dependencies
+### 2. Install  Dependencies
+```
+apt install python3 python3-pip python3-venv -y
+```
+
 Clone this repository and install the dependencies:
 ```bash
 git clone https://github.com/AbuZar-Ansarii/Needle.git
 cd Needle
+python3 -m venv myenv
+source myenv/bin/activate
+```
+```
 pip3 install -r requirements.txt
 ```
 
