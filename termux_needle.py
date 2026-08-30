@@ -55,7 +55,15 @@ def get_battery_status():
 def text_to_speech(text: str):
     """Speak a text string aloud using the phone's Text-to-Speech (TTS) engine."""
     print(f"-> Calling Tool: text_to_speech(text='{text}')")
-    return run_cmd(["termux-tts-speak", text])
+    try:
+        res = subprocess.run(["termux-tts-speak"], input=text, capture_output=True, text=True, timeout=10)
+        if res.returncode != 0:
+            return f"Error: {res.stderr.strip()}"
+        return res.stdout.strip() if res.stdout else "Speech triggered successfully."
+    except (FileNotFoundError, PermissionError):
+        return f"[Simulated Text-To-Speech] Spoke aloud: '{text}'"
+    except Exception as e:
+        return f"Error: {str(e)}"
 
 @needle.tool
 def set_clipboard(text: str):
@@ -86,7 +94,7 @@ def set_torch(on: bool):
 def get_location():
     """Retrieve the device's current GPS location coordinates (latitude, longitude, altitude)."""
     print("-> Calling Tool: get_location()")
-    res = run_cmd(["termux-location"])
+    res = run_cmd(["termux-location", "-p", "network", "-r", "last"])
     try:
         return json.loads(res)
     except Exception:
