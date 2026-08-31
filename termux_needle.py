@@ -126,6 +126,11 @@ def get_wifi_info():
 @needle.tool
 def take_camera_photo(camera_id: int = 0, filename: str = "photo.jpg"):
     """Capture a photo using the phone's front (1) or back (0) camera and save it."""
+    if not os.path.isabs(filename):
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        filename = os.path.abspath(os.path.join(script_dir, filename))
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    
     print(f"-> Calling Tool: take_camera_photo(camera_id={camera_id}, filename='{filename}')")
     return run_cmd(["termux-camera-photo", "-c", str(camera_id), filename])
 
@@ -154,6 +159,101 @@ def download_file(url: str, title: str = "Download"):
     """Download a file from a URL using the system's download manager."""
     print(f"-> Calling Tool: download_file(url='{url}', title='{title}')")
     return run_cmd(["termux-download", "-t", title, url])
+
+@needle.tool
+def set_screen_brightness(level: str):
+    """Adjust the screen brightness. Provide a value between 0 (dimmest) and 255 (brightest), or 'auto'."""
+    print(f"-> Calling Tool: set_screen_brightness(level='{level}')")
+    return run_cmd(["termux-brightness", str(level)])
+
+@needle.tool
+def get_volume_info():
+    """Retrieve the current volume levels of all audio streams (music, ring, alarm, etc.)."""
+    print("-> Calling Tool: get_volume_info()")
+    res = run_cmd(["termux-volume"])
+    try:
+        return json.loads(res)
+    except Exception:
+        return res
+
+@needle.tool
+def set_volume(stream: str, volume: int):
+    """Set the volume level of a specific audio stream (alarm, music, notification, ring, system, call)."""
+    print(f"-> Calling Tool: set_volume(stream='{stream}', volume={volume})")
+    return run_cmd(["termux-volume", stream, str(volume)])
+
+@needle.tool
+def share_content(text: str = "", file_path: str = ""):
+    """Share text content or a file using the Android system share sheet."""
+    print(f"-> Calling Tool: share_content(text='{text}', file_path='{file_path}')")
+    if file_path:
+        return run_cmd(["termux-share", "-a", "send", file_path])
+    elif text:
+        try:
+            res = subprocess.run(["termux-share", "-a", "send"], input=text, capture_output=True, text=True, timeout=10)
+            if res.returncode != 0:
+                return f"Error: {res.stderr.strip()}"
+            return res.stdout.strip() if res.stdout else "Content shared successfully."
+        except Exception as e:
+            return f"Error sharing text: {str(e)}"
+    else:
+        return "Error: Either text or file_path must be provided."
+
+@needle.tool
+def get_call_log(limit: int = 5):
+    """Retrieve the recent call log history from the phone."""
+    print(f"-> Calling Tool: get_call_log(limit={limit})")
+    res = run_cmd(["termux-call-log", "-l", str(limit)])
+    try:
+        return json.loads(res)
+    except Exception:
+        return res
+
+@needle.tool
+def authenticate_fingerprint():
+    """Prompt for fingerprint authentication on the device to verify user identity."""
+    print("-> Calling Tool: authenticate_fingerprint()")
+    res = run_cmd(["termux-fingerprint"])
+    try:
+        return json.loads(res)
+    except Exception:
+        return res
+
+@needle.tool
+def record_audio_start(file_path: str = "recording.3gp", limit_seconds: int = 0):
+    """Begin recording audio from the device microphone to a specified file. Optionally set a duration limit in seconds."""
+    print(f"-> Calling Tool: record_audio_start(file_path='{file_path}', limit_seconds={limit_seconds})")
+    cmd = ["termux-microphone-record", "-f", file_path]
+    if limit_seconds > 0:
+        cmd.extend(["-l", str(limit_seconds)])
+    return run_cmd(cmd)
+
+@needle.tool
+def record_audio_stop():
+    """Stop the ongoing microphone audio recording and save the file."""
+    print("-> Calling Tool: record_audio_stop()")
+    return run_cmd(["termux-microphone-record", "-q"])
+
+@needle.tool
+def get_telephony_info():
+    """Retrieve device telephony information (network operator, SIM state, network type, IMEI/device ID)."""
+    print("-> Calling Tool: get_telephony_info()")
+    res = run_cmd(["termux-telephony-deviceinfo"])
+    try:
+        return json.loads(res)
+    except Exception:
+        return res
+
+@needle.tool
+def scan_wifi_networks():
+    """Scan and retrieve a list of nearby Wi-Fi networks and their signal strengths."""
+    print("-> Calling Tool: scan_wifi_networks()")
+    res = run_cmd(["termux-wifi-scaninfo"])
+    try:
+        return json.loads(res)
+    except Exception:
+        return res
+
 
 
 def preprocess_query(query: str) -> str:
@@ -185,7 +285,10 @@ def main():
             text_to_speech, set_clipboard, get_clipboard, 
             vibrate_device, set_torch, get_location, 
             send_sms, make_phone_call, get_wifi_info,
-            take_camera_photo, get_sms_messages, get_contacts, download_file
+            take_camera_photo, get_sms_messages, get_contacts, download_file,
+            set_screen_brightness, get_volume_info, set_volume, share_content,
+            get_call_log, authenticate_fingerprint, record_audio_start,
+            record_audio_stop, get_telephony_info, scan_wifi_networks
         ]
         agent = needle.Needle(tools=tools)
         print("Needle model loaded successfully!")

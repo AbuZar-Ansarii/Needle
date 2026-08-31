@@ -109,6 +109,63 @@ def run_cmd(args):
             title = args[2] if len(args) > 2 else "Download"
             url = args[3] if len(args) > 3 else ""
             return f"[Simulated Download] Downloading URL: {url} as '{title}'"
+        elif cmd == "termux-brightness":
+            val = args[1]
+            return f"[Simulated Screen] Set screen brightness to {val}"
+        elif cmd == "termux-volume":
+            if len(args) > 2:
+                stream = args[1]
+                volume = args[2]
+                return f"[Simulated Audio] Set volume stream '{stream}' to {volume}"
+            else:
+                return json.dumps([
+                    {"stream": "music", "volume": 11, "max_volume": 15},
+                    {"stream": "ring", "volume": 5, "max_volume": 7},
+                    {"stream": "alarm", "volume": 6, "max_volume": 7},
+                    {"stream": "notification", "volume": 5, "max_volume": 7},
+                    {"stream": "system", "volume": 7, "max_volume": 7},
+                    {"stream": "call", "volume": 4, "max_volume": 5}
+                ])
+        elif cmd == "termux-share":
+            file_arg = args[3] if len(args) > 3 else "stdin text content"
+            return f"[Simulated Share] Shared content via system share sheet: '{file_arg}'"
+        elif cmd == "termux-call-log":
+            limit = args[2] if len(args) > 2 else "5"
+            return json.dumps([
+                {"name": "Alice Smith", "number": "+1987654321", "duration": "2m 14s", "date": "2026-08-31 10:15:22", "type": "incoming"},
+                {"name": "John Doe", "number": "+14155552671", "duration": "0s", "date": "2026-08-30 18:44:10", "type": "missed"},
+                {"name": "Bob Jones", "number": "+15550199", "duration": "5m 45s", "date": "2026-08-30 14:02:01", "type": "outgoing"}
+            ][:int(limit) if limit.isdigit() else None])
+        elif cmd == "termux-fingerprint":
+            return json.dumps({"auth_result": "AUTH_SUCCESS", "errors": None})
+        elif cmd == "termux-microphone-record":
+            if "-q" in args:
+                return "[Simulated Recording] Microphone recording stopped and saved."
+            else:
+                file_idx = args.index("-f") + 1 if "-f" in args else -1
+                file_path = args[file_idx] if file_idx != -1 and file_idx < len(args) else "recording.3gp"
+                return f"[Simulated Recording] Microphone recording started into '{file_path}'"
+        elif cmd == "termux-telephony-deviceinfo":
+            return json.dumps({
+                "data_activity": "DATA_ACTIVITY_NONE",
+                "data_state": "DATA_CONNECTED",
+                "device_id": "864209753197531",
+                "device_software_version": "01",
+                "network_operator": "Google Fi",
+                "network_operator_name": "Google Fi",
+                "network_type": "LTE",
+                "phone_type": "PHONE_TYPE_GSM",
+                "sim_country_iso": "us",
+                "sim_operator": "310260",
+                "sim_operator_name": "Google Fi",
+                "sim_serial_number": "8901260xxxxxxxxxxxx",
+                "sim_state": "SIM_STATE_READY"
+            })
+        elif cmd == "termux-wifi-scaninfo":
+            return json.dumps([
+                {"bssid": "aa:bb:cc:dd:ee:ff", "frequency_mhz": 5240, "rssi": -55, "ssid": "Home-Network_5G", "timestamp_ms": 1725100000000},
+                {"bssid": "11:22:33:44:55:66", "frequency_mhz": 2412, "rssi": -72, "ssid": "Cafe_Free_Wifi", "timestamp_ms": 1725100000000}
+            ])
         else:
             return f"[Simulated Action] Executed command: {' '.join(args)}"
 
@@ -213,6 +270,11 @@ def get_wifi_info():
 @needle.tool
 def take_camera_photo(camera_id: int = 0, filename: str = "photo.jpg"):
     """Capture a photo using the phone's front (1) or back (0) camera and save it."""
+    if not os.path.isabs(filename):
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        filename = os.path.abspath(os.path.join(script_dir, filename))
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    
     print(f"[Agent Triggered Tool] take_camera_photo(camera_id={camera_id}, filename='{filename}')")
     return run_cmd(["termux-camera-photo", "-c", str(camera_id), filename])
 
@@ -242,6 +304,100 @@ def download_file(url: str, title: str = "Download"):
     print(f"[Agent Triggered Tool] download_file(url='{url}', title='{title}')")
     return run_cmd(["termux-download", "-t", title, url])
 
+@needle.tool
+def set_screen_brightness(level: str):
+    """Adjust the screen brightness. Provide a value between 0 (dimmest) and 255 (brightest), or 'auto'."""
+    print(f"[Agent Triggered Tool] set_screen_brightness(level='{level}')")
+    return run_cmd(["termux-brightness", str(level)])
+
+@needle.tool
+def get_volume_info():
+    """Retrieve the current volume levels of all audio streams (music, ring, alarm, etc.)."""
+    print("[Agent Triggered Tool] get_volume_info()")
+    res = run_cmd(["termux-volume"])
+    try:
+        return json.loads(res)
+    except Exception:
+        return res
+
+@needle.tool
+def set_volume(stream: str, volume: int):
+    """Set the volume level of a specific audio stream (alarm, music, notification, ring, system, call)."""
+    print(f"[Agent Triggered Tool] set_volume(stream='{stream}', volume={volume})")
+    return run_cmd(["termux-volume", stream, str(volume)])
+
+@needle.tool
+def share_content(text: str = "", file_path: str = ""):
+    """Share text content or a file using the Android system share sheet."""
+    print(f"[Agent Triggered Tool] share_content(text='{text}', file_path='{file_path}')")
+    if file_path:
+        return run_cmd(["termux-share", "-a", "send", file_path])
+    elif text:
+        try:
+            res = subprocess.run(["termux-share", "-a", "send"], input=text, capture_output=True, text=True, timeout=10)
+            if res.returncode != 0:
+                return f"Error: {res.stderr.strip()}"
+            return res.stdout.strip() if res.stdout else "Content shared successfully."
+        except Exception as e:
+            return f"Error sharing text: {str(e)}"
+    else:
+        return "Error: Either text or file_path must be provided."
+
+@needle.tool
+def get_call_log(limit: int = 5):
+    """Retrieve the recent call log history from the phone."""
+    print(f"[Agent Triggered Tool] get_call_log(limit={limit})")
+    res = run_cmd(["termux-call-log", "-l", str(limit)])
+    try:
+        return json.loads(res)
+    except Exception:
+        return res
+
+@needle.tool
+def authenticate_fingerprint():
+    """Prompt for fingerprint authentication on the device to verify user identity."""
+    print("[Agent Triggered Tool] authenticate_fingerprint()")
+    res = run_cmd(["termux-fingerprint"])
+    try:
+        return json.loads(res)
+    except Exception:
+        return res
+
+@needle.tool
+def record_audio_start(file_path: str = "recording.3gp", limit_seconds: int = 0):
+    """Begin recording audio from the device microphone to a specified file. Optionally set a duration limit in seconds."""
+    print(f"[Agent Triggered Tool] record_audio_start(file_path='{file_path}', limit_seconds={limit_seconds})")
+    cmd = ["termux-microphone-record", "-f", file_path]
+    if limit_seconds > 0:
+        cmd.extend(["-l", str(limit_seconds)])
+    return run_cmd(cmd)
+
+@needle.tool
+def record_audio_stop():
+    """Stop the ongoing microphone audio recording and save the file."""
+    print("[Agent Triggered Tool] record_audio_stop()")
+    return run_cmd(["termux-microphone-record", "-q"])
+
+@needle.tool
+def get_telephony_info():
+    """Retrieve device telephony information (network operator, SIM state, network type, IMEI/device ID)."""
+    print("[Agent Triggered Tool] get_telephony_info()")
+    res = run_cmd(["termux-telephony-deviceinfo"])
+    try:
+        return json.loads(res)
+    except Exception:
+        return res
+
+@needle.tool
+def scan_wifi_networks():
+    """Scan and retrieve a list of nearby Wi-Fi networks and their signal strengths."""
+    print("[Agent Triggered Tool] scan_wifi_networks()")
+    res = run_cmd(["termux-wifi-scaninfo"])
+    try:
+        return json.loads(res)
+    except Exception:
+        return res
+
 
 # ----------------------------------------------------------------------
 # Initialize the Needle Agent
@@ -252,7 +408,10 @@ tools_list = [
     text_to_speech, set_clipboard, get_clipboard, 
     vibrate_device, set_torch, get_location, 
     send_sms, make_phone_call, get_wifi_info,
-    take_camera_photo, get_sms_messages, get_contacts, download_file
+    take_camera_photo, get_sms_messages, get_contacts, download_file,
+    set_screen_brightness, get_volume_info, set_volume, share_content,
+    get_call_log, authenticate_fingerprint, record_audio_start,
+    record_audio_stop, get_telephony_info, scan_wifi_networks
 ]
 agent = needle.Needle(tools=tools_list)
 print("Needle model active and ready!")
@@ -891,6 +1050,46 @@ HTML_TEMPLATE = """
                             <span class="tag-label">Alert</span>
                             <strong>Trigger Toast</strong>
                         </button>
+                        <button class="trigger-card" onclick="submitCommand('Set screen brightness to 150')">
+                            <span class="tag-label">Display</span>
+                            <strong>Brightness (Mid)</strong>
+                        </button>
+                        <button class="trigger-card" onclick="submitCommand('Get volume levels info')">
+                            <span class="tag-label">Audio</span>
+                            <strong>Volume Info</strong>
+                        </button>
+                        <button class="trigger-card" onclick="submitCommand('Set music stream volume to 10')">
+                            <span class="tag-label">Audio</span>
+                            <strong>Set Volume (10)</strong>
+                        </button>
+                        <button class="trigger-card" onclick="submitCommand('Share text Hello from Termux Agent!')">
+                            <span class="tag-label">System</span>
+                            <strong>Share Text</strong>
+                        </button>
+                        <button class="trigger-card" onclick="submitCommand('Show recent call logs')">
+                            <span class="tag-label">Telephony</span>
+                            <strong>Call Logs</strong>
+                        </button>
+                        <button class="trigger-card" onclick="submitCommand('Authenticate fingerprint')">
+                            <span class="tag-label">Security</span>
+                            <strong>Fingerprint Auth</strong>
+                        </button>
+                        <button class="trigger-card" onclick="submitCommand('Start audio recording to recording.3gp')">
+                            <span class="tag-label">Audio</span>
+                            <strong>Record Start</strong>
+                        </button>
+                        <button class="trigger-card" onclick="submitCommand('Stop audio recording')">
+                            <span class="tag-label">Audio</span>
+                            <strong>Record Stop</strong>
+                        </button>
+                        <button class="trigger-card" onclick="submitCommand('Get telephony device info')">
+                            <span class="tag-label">Telephony</span>
+                            <strong>Device Info</strong>
+                        </button>
+                        <button class="trigger-card" onclick="submitCommand('Scan for nearby wifi networks')">
+                            <span class="tag-label">Network</span>
+                            <strong>Wi-Fi Scan</strong>
+                        </button>
                     </div>
                 </div>
 
@@ -1148,6 +1347,16 @@ def preprocess_query(query: str) -> str:
 @app.route("/")
 def index():
     return render_template_string(HTML_TEMPLATE)
+
+@app.route("/photo.jpg")
+def serve_photo():
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    photo_path = os.path.join(script_dir, "photo.jpg")
+    if os.path.exists(photo_path):
+        from flask import send_file
+        return send_file(photo_path, mimetype="image/jpeg")
+    else:
+        return "Photo not found", 404
 
 @app.route("/api/chat", methods=["POST"])
 def chat_api():
