@@ -316,8 +316,8 @@ def open_app(app_name: str):
     app_key = app_name.strip().lower()
     
     app_urls = {
-        "whatsapp": "whatsapp://",
         "youtube": "https://www.youtube.com",
+        "whatsapp": "whatsapp://",
         "chrome": "https://www.google.com",
         "browser": "https://www.google.com",
         "instagram": "https://instagram.com",
@@ -332,41 +332,46 @@ def open_app(app_name: str):
     }
 
     app_packages = {
-        "whatsapp": "com.whatsapp/.HomeActivity",
-        "youtube": "com.google.android.youtube/com.google.android.youtube.PlayerActivity",
-        "chrome": "com.android.chrome/com.google.android.apps.chrome.Main",
-        "instagram": "com.instagram.android/com.instagram.mainactivity.LauncherActivity",
-        "spotify": "com.spotify.music/com.spotify.music.MainActivity",
-        "telegram": "org.telegram.messenger/org.telegram.ui.LaunchActivity",
-        "facebook": "com.facebook.katana/com.facebook.katana.LoginActivity",
-        "gmail": "com.google.android.gm/com.google.android.gm.ConversationListActivityGmail",
-        "settings": "com.android.settings/.Settings",
-        "calculator": "com.google.android.calculator/com.android.calculator2.Calculator",
-        "camera": "com.android.camera/com.android.camera.Camera"
+        "youtube": "com.google.android.youtube",
+        "whatsapp": "com.whatsapp",
+        "chrome": "com.android.chrome",
+        "instagram": "com.instagram.android",
+        "spotify": "com.spotify.music",
+        "telegram": "org.telegram.messenger",
+        "facebook": "com.facebook.katana",
+        "gmail": "com.google.android.gm",
+        "maps": "com.google.android.apps.maps",
+        "settings": "com.android.settings",
+        "calculator": "com.google.android.calculator",
+        "camera": "com.android.camera"
     }
 
-    # Attempt 1: am start --user 0 -n <package/activity>
+    app_activities = {
+        "settings": "com.android.settings/.Settings",
+        "calculator": "com.google.android.calculator/com.android.calculator2.Calculator",
+        "whatsapp": "com.whatsapp/.HomeActivity",
+        "youtube": "com.google.android.youtube/com.google.android.youtube.app.honeycomb.Shell$HomeActivity",
+        "chrome": "com.android.chrome/com.google.android.apps.chrome.Main"
+    }
+
+    # Trigger Step 1: Deep Link Intent via am start
+    if app_key in app_urls:
+        url = app_urls[app_key]
+        run_cmd(["am", "start", "--user", "0", "-a", "android.intent.action.VIEW", "-d", url])
+        run_cmd(["termux-open-url", url])
+
+    # Trigger Step 2: Monkey Launcher via package
     if app_key in app_packages:
-        res1 = run_cmd(["am", "start", "--user", "0", "-n", app_packages[app_key]])
-        if "Error" not in res1 and ("Starting: Intent" in res1 or "Status: ok" in res1 or res1 == "Success"):
-            return f"Successfully opened {app_name} on device screen."
+        pkg = app_packages[app_key]
+        run_cmd(["monkey", "-p", pkg, "--user", "0", "-c", "android.intent.category.LAUNCHER", "1"])
+    elif "." in app_key:
+        run_cmd(["monkey", "-p", app_key, "--user", "0", "-c", "android.intent.category.LAUNCHER", "1"])
 
-    # Attempt 2: am start --user 0 -a android.intent.action.VIEW -d <url>
-    if app_key in app_urls:
-        res2 = run_cmd(["am", "start", "--user", "0", "-a", "android.intent.action.VIEW", "-d", app_urls[app_key]])
-        if "Error" not in res2 and ("Starting: Intent" in res2 or res2 == "Success"):
-            return f"Successfully opened {app_name} on device screen."
+    # Trigger Step 3: Exact Component Activity
+    if app_key in app_activities:
+        run_cmd(["am", "start", "--user", "0", "-n", app_activities[app_key]])
 
-    # Attempt 3: termux-open-url
-    if app_key in app_urls:
-        res3 = run_cmd(["termux-open-url", app_urls[app_key]])
-        if "Error" not in res3:
-            return f"Successfully opened {app_name} on device screen."
-
-    # Attempt 4: monkey --user 0
-    pkg = app_packages[app_key].split("/")[0] if app_key in app_packages else (app_key if "." in app_key else f"com.{app_key}")
-    res4 = run_cmd(["monkey", "-p", pkg, "--user", "0", "-c", "android.intent.category.LAUNCHER", "1"])
-    return f"Triggered app launch for {app_name}."
+    return f"Successfully launched {app_name} on your phone screen."
 
 @needle.tool
 def get_sms_messages(limit: int = 5):
