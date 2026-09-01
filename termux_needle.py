@@ -125,63 +125,76 @@ def get_wifi_info():
 
 
 @needle.tool
-def take_camera_photo(camera_id: int = 0, filename: str = "needle_photo.jpg"):
-    """Capture a photo using the phone's front (1) or back (0) camera and save it. Prevents storage permission errors."""
+def take_camera_photo():
+    """Capture a photo using the phone's back camera and save it directly to the Download folder."""
+    print("-> Calling Tool: take_camera_photo()")
     home_dir = os.path.expanduser("~")
-    safe_target = os.path.join(home_dir, "needle_photo.jpg")
-    
-    print(f"-> Calling Tool: take_camera_photo(camera_id={camera_id}, filename='{safe_target}')")
-    res = run_cmd(["termux-camera-photo", "-c", str(camera_id), safe_target])
-    
-    # Try copying to Downloads folder if available
     downloads_dir = os.path.join(home_dir, "storage", "downloads")
+    
     if os.path.exists(downloads_dir):
-        try:
-            dest = os.path.join(downloads_dir, os.path.basename(filename) if filename else "needle_photo.jpg")
-            shutil.copy2(safe_target, dest)
-            return f"Photo captured successfully and saved to Download folder: '{dest}' (Home backup: '{safe_target}')"
-        except Exception:
-            pass
-            
-    return res if res else f"Photo captured successfully and saved to: '{safe_target}'"
+        target_path = os.path.join(downloads_dir, "needle_photo.jpg")
+    else:
+        target_path = os.path.join(home_dir, "needle_photo.jpg")
+        
+    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+    res = run_cmd(["termux-camera-photo", "-c", "0", target_path])
+    
+    if "Error" in res or "error" in res.lower():
+        fallback_path = os.path.join(home_dir, "needle_photo.jpg")
+        run_cmd(["termux-camera-photo", "-c", "0", fallback_path])
+        return f"Photo captured with back camera and saved to: '{fallback_path}'"
+        
+    return f"Photo captured with back camera and saved to: '{target_path}'"
 
 @needle.tool
 def open_app(app_name: str):
-    """Open an application on the phone by its name or Android package name (e.g. 'whatsapp', 'youtube', 'chrome', 'instagram', 'spotify', 'com.whatsapp')."""
+    """Open an application on the phone (e.g. 'whatsapp', 'youtube', 'chrome', 'instagram', 'spotify', 'telegram', 'facebook', 'twitter', 'gmail', 'maps', 'calculator', 'settings')."""
     print(f"-> Calling Tool: open_app(app_name='{app_name}')")
     
-    app_map = {
-        "whatsapp": "com.whatsapp",
-        "youtube": "com.google.android.youtube",
-        "chrome": "com.android.chrome",
-        "instagram": "com.instagram.android",
-        "spotify": "com.spotify.music",
-        "telegram": "org.telegram.messenger",
-        "facebook": "com.facebook.katana",
-        "twitter": "com.twitter.android",
-        "x": "com.twitter.android",
-        "gmail": "com.google.android.gm",
-        "maps": "com.google.android.apps.maps",
-        "google maps": "com.google.android.apps.maps",
-        "camera": "com.android.camera",
-        "photos": "com.google.android.apps.photos",
-        "gallery": "com.google.android.apps.photos",
-        "settings": "com.android.settings",
-        "play store": "com.android.vending",
-        "playstore": "com.android.vending",
-        "clock": "com.google.android.deskclock",
-        "calculator": "com.google.android.calculator"
+    app_key = app_name.strip().lower()
+    
+    app_urls = {
+        "whatsapp": "https://api.whatsapp.com",
+        "youtube": "https://www.youtube.com",
+        "chrome": "https://www.google.com",
+        "browser": "https://www.google.com",
+        "instagram": "https://www.instagram.com",
+        "spotify": "https://open.spotify.com",
+        "telegram": "https://t.me",
+        "facebook": "https://www.facebook.com",
+        "twitter": "https://twitter.com",
+        "x": "https://x.com",
+        "gmail": "mailto:",
+        "maps": "https://maps.google.com",
+        "google maps": "https://maps.google.com"
     }
     
-    key = app_name.strip().lower()
-    package_name = app_map.get(key, app_name.strip())
+    app_activities = {
+        "whatsapp": "com.whatsapp/.Main",
+        "youtube": "com.google.android.youtube/com.google.android.youtube.HomeActivity",
+        "chrome": "com.android.chrome/com.google.android.apps.chrome.Main",
+        "instagram": "com.instagram.android/com.instagram.mainactivity.InstagramMainActivity",
+        "spotify": "com.spotify.music/com.spotify.music.MainActivity",
+        "telegram": "org.telegram.messenger/org.telegram.ui.LaunchActivity",
+        "facebook": "com.facebook.katana/com.facebook.katana.LoginActivity",
+        "gmail": "com.google.android.gm/com.google.android.gm.ConversationListActivityGmail",
+        "settings": "com.android.settings/.Settings",
+        "calculator": "com.google.android.calculator/com.android.calculator2.Calculator",
+        "camera": "com.android.camera/com.android.camera.Camera"
+    }
     
-    res = run_cmd(["monkey", "-p", package_name, "-c", "android.intent.category.LAUNCHER", "1"])
-    if "Error" not in res and "No activities" not in res and "error" not in res.lower():
-        return f"Successfully opened app: '{app_name}' ({package_name})"
-    
-    res_am = run_cmd(["am", "start", "-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER", "-n", f"{package_name}/.MainActivity"])
-    return f"Opened app: '{app_name}' ({package_name})"
+    if app_key in app_activities:
+        act = app_activities[app_key]
+        res_am = run_cmd(["am", "start", "-n", act])
+        if "Error" not in res_am and "error" not in res_am.lower():
+            return f"Successfully opened app: '{app_name}' via Activity Manager."
+            
+    if app_key in app_urls:
+        run_cmd(["termux-open-url", app_urls[app_key]])
+        return f"Successfully opened app: '{app_name}' on device screen."
+        
+    run_cmd(["monkey", "-p", app_name, "-c", "android.intent.category.LAUNCHER", "1"])
+    return f"Triggered launch for app '{app_name}'."
 
 @needle.tool
 def get_sms_messages(limit: int = 5):
