@@ -154,14 +154,14 @@ def take_camera_photo():
 
 @needle.tool
 def open_app(app_name: str):
-    """Open an application on the phone (e.g. 'whatsapp', 'youtube', 'chrome', 'instagram', 'spotify', 'telegram', 'facebook', 'twitter', 'gmail', 'maps', 'calculator', 'settings')."""
+    """Open an application on the phone screen (e.g. 'whatsapp', 'youtube', 'chrome', 'instagram', 'spotify', 'telegram', 'facebook', 'twitter', 'gmail', 'maps', 'calculator', 'settings')."""
     print(f"-> Calling Tool: open_app(app_name='{app_name}')")
     
     app_key = app_name.strip().lower()
     
     app_urls = {
         "youtube": "https://www.youtube.com",
-        "whatsapp": "whatsapp://",
+        "whatsapp": "https://api.whatsapp.com",
         "chrome": "https://www.google.com",
         "browser": "https://www.google.com",
         "instagram": "https://instagram.com",
@@ -175,47 +175,40 @@ def open_app(app_name: str):
         "google maps": "https://maps.google.com"
     }
 
-    app_packages = {
-        "youtube": "com.google.android.youtube",
-        "whatsapp": "com.whatsapp",
-        "chrome": "com.android.chrome",
-        "instagram": "com.instagram.android",
-        "spotify": "com.spotify.music",
-        "telegram": "org.telegram.messenger",
-        "facebook": "com.facebook.katana",
-        "gmail": "com.google.android.gm",
-        "maps": "com.google.android.apps.maps",
-        "settings": "com.android.settings",
-        "calculator": "com.google.android.calculator",
-        "camera": "com.android.camera"
+    app_schemes = {
+        "whatsapp": "whatsapp://",
+        "youtube": "https://www.youtube.com"
     }
 
-    app_activities = {
+    app_packages = {
         "settings": "com.android.settings/.Settings",
         "calculator": "com.google.android.calculator/com.android.calculator2.Calculator",
-        "whatsapp": "com.whatsapp/.HomeActivity",
-        "youtube": "com.google.android.youtube/com.google.android.youtube.app.honeycomb.Shell$HomeActivity",
-        "chrome": "com.android.chrome/com.google.android.apps.chrome.Main"
+        "camera": "com.android.camera/com.android.camera.Camera"
     }
 
-    # Trigger Step 1: Deep Link Intent via am start
+    # 1. Primary method: termux-open with web/app URL (verified natively by user)
     if app_key in app_urls:
         url = app_urls[app_key]
-        run_cmd(["am", "start", "--user", "0", "-a", "android.intent.action.VIEW", "-d", url])
-        run_cmd(["termux-open-url", url])
+        run_cmd(["termux-open", url])
+        return f"Successfully opened '{app_name}' on device screen using termux-open."
 
-    # Trigger Step 2: Monkey Launcher via package
+    if app_key in app_schemes:
+        scheme = app_schemes[app_key]
+        run_cmd(["termux-open", scheme])
+        return f"Successfully opened '{app_name}' on device screen using termux-open."
+
+    # 2. System Settings / Calculator / Special Apps
     if app_key in app_packages:
-        pkg = app_packages[app_key]
-        run_cmd(["monkey", "-p", pkg, "--user", "0", "-c", "android.intent.category.LAUNCHER", "1"])
-    elif "." in app_key:
-        run_cmd(["monkey", "-p", app_key, "--user", "0", "-c", "android.intent.category.LAUNCHER", "1"])
+        run_cmd(["am", "start", "--user", "0", "-n", app_packages[app_key]])
+        return f"Successfully opened '{app_name}' on device screen."
 
-    # Trigger Step 3: Exact Component Activity
-    if app_key in app_activities:
-        run_cmd(["am", "start", "--user", "0", "-n", app_activities[app_key]])
+    # 3. Generic fallback
+    if app_key.startswith("http://") or app_key.startswith("https://"):
+        run_cmd(["termux-open", app_key])
+        return f"Successfully opened '{app_key}' on device screen."
 
-    return f"Successfully launched {app_name} on your phone screen."
+    run_cmd(["termux-open", f"https://www.google.com/search?q={app_name}"])
+    return f"Opened '{app_name}' on device screen using termux-open."
 
 @needle.tool
 def get_sms_messages(limit: int = 5):
