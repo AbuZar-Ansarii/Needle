@@ -159,60 +159,58 @@ def open_app(app_name: str):
     
     app_key = app_name.strip().lower()
     
-    am_intents = {
-        "whatsapp": ["am", "start", "-a", "android.intent.action.VIEW", "-d", "whatsapp://"],
-        "youtube": ["am", "start", "-a", "android.intent.action.VIEW", "-d", "https://www.youtube.com"],
-        "chrome": ["am", "start", "-a", "android.intent.action.VIEW", "-d", "https://www.google.com"],
-        "browser": ["am", "start", "-a", "android.intent.action.VIEW", "-d", "https://www.google.com"],
-        "instagram": ["am", "start", "-a", "android.intent.action.VIEW", "-d", "https://instagram.com"],
-        "spotify": ["am", "start", "-a", "android.intent.action.VIEW", "-d", "https://open.spotify.com"],
-        "telegram": ["am", "start", "-a", "android.intent.action.VIEW", "-d", "https://t.me"],
-        "facebook": ["am", "start", "-a", "android.intent.action.VIEW", "-d", "https://facebook.com"],
-        "twitter": ["am", "start", "-a", "android.intent.action.VIEW", "-d", "https://twitter.com"],
-        "x": ["am", "start", "-a", "android.intent.action.VIEW", "-d", "https://x.com"],
-        "gmail": ["am", "start", "-a", "android.intent.action.VIEW", "-d", "mailto:"],
-        "maps": ["am", "start", "-a", "android.intent.action.VIEW", "-d", "https://maps.google.com"],
-        "google maps": ["am", "start", "-a", "android.intent.action.VIEW", "-d", "https://maps.google.com"],
-        "settings": ["am", "start", "-n", "com.android.settings/.Settings"],
-        "calculator": ["am", "start", "-n", "com.google.android.calculator/com.android.calculator2.Calculator"],
-        "camera": ["am", "start", "-a", "android.media.action.IMAGE_CAPTURE"]
-    }
-
-    am_activities = {
-        "whatsapp": ["am", "start", "-n", "com.whatsapp/.HomeActivity"],
-        "youtube": ["am", "start", "-n", "com.google.android.youtube/com.google.android.youtube.PlayerActivity"],
-        "chrome": ["am", "start", "-n", "com.android.chrome/com.google.android.apps.chrome.Main"],
-        "instagram": ["am", "start", "-n", "com.instagram.android/com.instagram.mainactivity.LauncherActivity"],
-        "spotify": ["am", "start", "-n", "com.spotify.music/com.spotify.music.MainActivity"],
-        "telegram": ["am", "start", "-n", "org.telegram.messenger/org.telegram.ui.LaunchActivity"]
-    }
-
     app_urls = {
         "whatsapp": "whatsapp://",
         "youtube": "https://www.youtube.com",
         "chrome": "https://www.google.com",
+        "browser": "https://www.google.com",
         "instagram": "https://instagram.com",
         "spotify": "https://open.spotify.com",
-        "telegram": "https://t.me"
+        "telegram": "https://t.me",
+        "facebook": "https://facebook.com",
+        "twitter": "https://twitter.com",
+        "x": "https://x.com",
+        "gmail": "mailto:",
+        "maps": "https://maps.google.com",
+        "google maps": "https://maps.google.com"
     }
 
-    if app_key in am_intents:
-        res_am = run_cmd(am_intents[app_key])
-        if "Error" not in res_am:
-            return f"Successfully opened {app_name} on your phone screen."
+    app_packages = {
+        "whatsapp": "com.whatsapp/.HomeActivity",
+        "youtube": "com.google.android.youtube/com.google.android.youtube.PlayerActivity",
+        "chrome": "com.android.chrome/com.google.android.apps.chrome.Main",
+        "instagram": "com.instagram.android/com.instagram.mainactivity.LauncherActivity",
+        "spotify": "com.spotify.music/com.spotify.music.MainActivity",
+        "telegram": "org.telegram.messenger/org.telegram.ui.LaunchActivity",
+        "facebook": "com.facebook.katana/com.facebook.katana.LoginActivity",
+        "gmail": "com.google.android.gm/com.google.android.gm.ConversationListActivityGmail",
+        "settings": "com.android.settings/.Settings",
+        "calculator": "com.google.android.calculator/com.android.calculator2.Calculator",
+        "camera": "com.android.camera/com.android.camera.Camera"
+    }
 
-    if app_key in am_activities:
-        res_act = run_cmd(am_activities[app_key])
-        if "Error" not in res_act:
-            return f"Successfully opened {app_name} on your phone screen."
+    # Attempt 1: am start --user 0 -n <package/activity>
+    if app_key in app_packages:
+        res1 = run_cmd(["am", "start", "--user", "0", "-n", app_packages[app_key]])
+        if "Error" not in res1 and ("Starting: Intent" in res1 or "Status: ok" in res1 or res1 == "Success"):
+            return f"Successfully opened {app_name} on device screen."
 
+    # Attempt 2: am start --user 0 -a android.intent.action.VIEW -d <url>
     if app_key in app_urls:
-        res_url = run_cmd(["termux-open-url", app_urls[app_key]])
-        if "Error" not in res_url:
-            return f"Opened {app_name} on your phone screen."
+        res2 = run_cmd(["am", "start", "--user", "0", "-a", "android.intent.action.VIEW", "-d", app_urls[app_key]])
+        if "Error" not in res2 and ("Starting: Intent" in res2 or res2 == "Success"):
+            return f"Successfully opened {app_name} on device screen."
 
-    run_cmd(["monkey", "-p", app_name, "-c", "android.intent.category.LAUNCHER", "1"])
-    return f"Triggered launch for '{app_name}'."
+    # Attempt 3: termux-open-url
+    if app_key in app_urls:
+        res3 = run_cmd(["termux-open-url", app_urls[app_key]])
+        if "Error" not in res3:
+            return f"Successfully opened {app_name} on device screen."
+
+    # Attempt 4: monkey --user 0
+    pkg = app_packages[app_key].split("/")[0] if app_key in app_packages else (app_key if "." in app_key else f"com.{app_key}")
+    res4 = run_cmd(["monkey", "-p", pkg, "--user", "0", "-c", "android.intent.category.LAUNCHER", "1"])
+    return f"Triggered app launch for {app_name}."
 
 @needle.tool
 def get_sms_messages(limit: int = 5):
