@@ -313,17 +313,23 @@ def open_app(app_name: str):
     """Open an application on the phone screen (e.g. 'whatsapp', 'youtube', 'chrome', 'instagram', 'spotify', 'telegram', 'facebook', 'twitter', 'gmail', 'maps', 'calculator', 'settings')."""
     print(f"[Agent Triggered Tool] open_app(app_name='{app_name}')")
     
-    app_key = app_name.strip().lower()
+    raw = app_name.strip().lower()
+    clean = raw.replace("open", "").replace("the", "").replace("app", "").strip()
     
     app_urls = {
         "youtube": "https://www.youtube.com",
+        "yt": "https://www.youtube.com",
         "whatsapp": "https://api.whatsapp.com",
-        "chrome": "https://www.google.com",
-        "browser": "https://www.google.com",
+        "wa": "https://api.whatsapp.com",
+        "chrome": "http://google.com",
+        "google": "http://google.com",
+        "browser": "http://google.com",
         "instagram": "https://instagram.com",
+        "insta": "https://instagram.com",
         "spotify": "https://open.spotify.com",
         "telegram": "https://t.me",
         "facebook": "https://facebook.com",
+        "fb": "https://facebook.com",
         "twitter": "https://twitter.com",
         "x": "https://x.com",
         "gmail": "mailto:",
@@ -331,40 +337,64 @@ def open_app(app_name: str):
         "google maps": "https://maps.google.com"
     }
 
-    app_schemes = {
-        "whatsapp": "whatsapp://",
-        "youtube": "https://www.youtube.com"
+    app_packages = {
+        "youtube": "com.google.android.youtube",
+        "whatsapp": "com.whatsapp",
+        "chrome": "com.android.chrome",
+        "instagram": "com.instagram.android",
+        "spotify": "com.spotify.music",
+        "telegram": "org.telegram.messenger",
+        "facebook": "com.facebook.katana",
+        "gmail": "com.google.android.gm",
+        "maps": "com.google.android.apps.maps",
+        "settings": "com.android.settings",
+        "calculator": "com.google.android.calculator",
+        "camera": "com.android.camera"
     }
 
-    app_packages = {
+    app_activities = {
         "settings": "com.android.settings/.Settings",
         "calculator": "com.google.android.calculator/com.android.calculator2.Calculator",
         "camera": "com.android.camera/com.android.camera.Camera"
     }
 
-    # 1. Primary method: termux-open with web/app URL (verified natively by user)
-    if app_key in app_urls:
-        url = app_urls[app_key]
-        run_cmd(["termux-open", url])
-        return f"Successfully opened '{app_name}' on device screen using termux-open."
+    target_key = None
+    for k in (clean, raw):
+        if k in app_urls or k in app_packages or k in app_activities:
+            target_key = k
+            break
+            
+    if not target_key:
+        for k in app_urls:
+            if k in clean or clean in k:
+                target_key = k
+                break
 
-    if app_key in app_schemes:
-        scheme = app_schemes[app_key]
-        run_cmd(["termux-open", scheme])
-        return f"Successfully opened '{app_name}' on device screen using termux-open."
+    if raw.startswith("http://") or raw.startswith("https://"):
+        run_cmd(["termux-open", raw])
+        run_cmd(["termux-open-url", raw])
+        return f"Opened URL '{raw}' on phone screen."
 
-    # 2. System Settings / Calculator / Special Apps
-    if app_key in app_packages:
-        run_cmd(["am", "start", "--user", "0", "-n", app_packages[app_key]])
-        return f"Successfully opened '{app_name}' on device screen."
+    if target_key:
+        if target_key in app_urls:
+            url = app_urls[target_key]
+            run_cmd(["termux-open", url])
+            run_cmd(["termux-open-url", url])
+            run_cmd(["am", "start", "--user", "0", "-a", "android.intent.action.VIEW", "-d", url])
 
-    # 3. Generic fallback
-    if app_key.startswith("http://") or app_key.startswith("https://"):
-        run_cmd(["termux-open", app_key])
-        return f"Successfully opened '{app_key}' on device screen."
+        if target_key in app_packages:
+            pkg = app_packages[target_key]
+            run_cmd(["monkey", "-p", pkg, "--user", "0", "-c", "android.intent.category.LAUNCHER", "1"])
 
-    run_cmd(["termux-open", f"https://www.google.com/search?q={app_name}"])
-    return f"Opened '{app_name}' on device screen using termux-open."
+        if target_key in app_activities:
+            act = app_activities[target_key]
+            run_cmd(["am", "start", "--user", "0", "-n", act])
+
+        return f"Successfully opened {app_name} on your phone screen."
+
+    run_cmd(["termux-open", f"http://google.com"])
+    run_cmd(["monkey", "-p", raw if "." in raw else f"com.{raw}", "--user", "0", "-c", "android.intent.category.LAUNCHER", "1"])
+    return f"Attempted opening '{app_name}' on phone screen."
 
 @needle.tool
 def get_sms_messages(limit: int = 5):
