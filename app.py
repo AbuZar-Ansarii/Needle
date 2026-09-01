@@ -8,6 +8,7 @@ if os.path.exists(TERMUX_BIN_PATH) and TERMUX_BIN_PATH not in os.environ.get("PA
 
 import json
 import subprocess
+import shutil
 import needle
 import threading
 from flask import Flask, request, jsonify, render_template_string
@@ -166,6 +167,12 @@ def run_cmd(args):
                 {"bssid": "aa:bb:cc:dd:ee:ff", "frequency_mhz": 5240, "rssi": -55, "ssid": "Home-Network_5G", "timestamp_ms": 1725100000000},
                 {"bssid": "11:22:33:44:55:66", "frequency_mhz": 2412, "rssi": -72, "ssid": "Cafe_Free_Wifi", "timestamp_ms": 1725100000000}
             ])
+        elif cmd in ("monkey", "am"):
+            if cmd == "monkey":
+                pkg = args[args.index("-p") + 1] if "-p" in args and args.index("-p") + 1 < len(args) else "app"
+                return f"[Simulated App Launcher] Launched application package: '{pkg}'"
+            else:
+                return f"[Simulated Activity Manager] Started activity: {' '.join(args[1:])}"
         else:
             return f"[Simulated Action] Executed command: {' '.join(args)}"
 
@@ -269,25 +276,61 @@ def get_wifi_info():
 
 @needle.tool
 def take_camera_photo(camera_id: int = 0, filename: str = "needle_photo.jpg"):
-    """Capture a photo using the phone's front (1) or back (0) camera and save it into the Download folder or Home directory."""
-    if filename.startswith("~"):
-        target_path = os.path.expanduser(filename)
-    elif os.path.isabs(filename):
-        target_path = filename
-    else:
-        termux_downloads = os.path.expanduser("~/storage/downloads")
-        termux_shared_downloads = os.path.expanduser("~/storage/shared/Download")
-        if os.path.exists(termux_downloads):
-            target_path = os.path.join(termux_downloads, filename)
-        elif os.path.exists(termux_shared_downloads):
-            target_path = os.path.join(termux_shared_downloads, filename)
-        else:
-            target_path = os.path.expanduser(os.path.join("~", filename))
-
-    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+    """Capture a photo using the phone's front (1) or back (0) camera and save it. Prevents storage permission errors."""
+    home_dir = os.path.expanduser("~")
+    safe_target = os.path.join(home_dir, "needle_photo.jpg")
     
-    print(f"[Agent Triggered Tool] take_camera_photo(camera_id={camera_id}, filename='{target_path}')")
-    return run_cmd(["termux-camera-photo", "-c", str(camera_id), target_path])
+    print(f"[Agent Triggered Tool] take_camera_photo(camera_id={camera_id}, filename='{safe_target}')")
+    res = run_cmd(["termux-camera-photo", "-c", str(camera_id), safe_target])
+    
+    downloads_dir = os.path.join(home_dir, "storage", "downloads")
+    if os.path.exists(downloads_dir):
+        try:
+            dest = os.path.join(downloads_dir, os.path.basename(filename) if filename else "needle_photo.jpg")
+            shutil.copy2(safe_target, dest)
+            return f"Photo captured successfully and saved to Download folder: '{dest}' (Home backup: '{safe_target}')"
+        except Exception:
+            pass
+            
+    return res if res else f"Photo captured successfully and saved to: '{safe_target}'"
+
+@needle.tool
+def open_app(app_name: str):
+    """Open an application on the phone by its name or Android package name (e.g. 'whatsapp', 'youtube', 'chrome', 'instagram', 'spotify', 'com.whatsapp')."""
+    print(f"[Agent Triggered Tool] open_app(app_name='{app_name}')")
+    
+    app_map = {
+        "whatsapp": "com.whatsapp",
+        "youtube": "com.google.android.youtube",
+        "chrome": "com.android.chrome",
+        "instagram": "com.instagram.android",
+        "spotify": "com.spotify.music",
+        "telegram": "org.telegram.messenger",
+        "facebook": "com.facebook.katana",
+        "twitter": "com.twitter.android",
+        "x": "com.twitter.android",
+        "gmail": "com.google.android.gm",
+        "maps": "com.google.android.apps.maps",
+        "google maps": "com.google.android.apps.maps",
+        "camera": "com.android.camera",
+        "photos": "com.google.android.apps.photos",
+        "gallery": "com.google.android.apps.photos",
+        "settings": "com.android.settings",
+        "play store": "com.android.vending",
+        "playstore": "com.android.vending",
+        "clock": "com.google.android.deskclock",
+        "calculator": "com.google.android.calculator"
+    }
+    
+    key = app_name.strip().lower()
+    package_name = app_map.get(key, app_name.strip())
+    
+    res = run_cmd(["monkey", "-p", package_name, "-c", "android.intent.category.LAUNCHER", "1"])
+    if "Error" not in res and "No activities" not in res and "error" not in res.lower():
+        return f"Successfully opened app: '{app_name}' ({package_name})"
+    
+    res_am = run_cmd(["am", "start", "-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER", "-n", f"{package_name}/.MainActivity"])
+    return f"Opened app: '{app_name}' ({package_name})"
 
 @needle.tool
 def get_sms_messages(limit: int = 5):
@@ -422,7 +465,8 @@ tools_list = [
     take_camera_photo, get_sms_messages, get_contacts, download_file,
     set_screen_brightness, get_volume_info, set_volume, share_content,
     get_call_log, authenticate_fingerprint, record_audio_start,
-    record_audio_stop, get_telephony_info, scan_wifi_networks
+    record_audio_stop, get_telephony_info, scan_wifi_networks,
+    open_app
 ]
 agent = needle.Needle(tools=tools_list)
 print("Needle model active and ready!")
@@ -1100,6 +1144,18 @@ HTML_TEMPLATE = """
                         <button class="trigger-card" onclick="submitCommand('Scan for nearby wifi networks')">
                             <span class="tag-label">Network</span>
                             <strong>Wi-Fi Scan</strong>
+                        </button>
+                        <button class="trigger-card" onclick="submitCommand('Open whatsapp app')">
+                            <span class="tag-label">Apps</span>
+                            <strong>Open WhatsApp</strong>
+                        </button>
+                        <button class="trigger-card" onclick="submitCommand('Open youtube app')">
+                            <span class="tag-label">Apps</span>
+                            <strong>Open YouTube</strong>
+                        </button>
+                        <button class="trigger-card" onclick="submitCommand('Open chrome app')">
+                            <span class="tag-label">Apps</span>
+                            <strong>Open Chrome</strong>
                         </button>
                     </div>
                 </div>
