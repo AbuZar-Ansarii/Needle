@@ -124,15 +124,26 @@ def get_wifi_info():
 
 
 @needle.tool
-def take_camera_photo(camera_id: int = 0, filename: str = "photo.jpg"):
-    """Capture a photo using the phone's front (1) or back (0) camera and save it."""
-    if not os.path.isabs(filename):
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        filename = os.path.abspath(os.path.join(script_dir, filename))
-    os.makedirs(os.path.dirname(filename), exist_ok=True)
+def take_camera_photo(camera_id: int = 0, filename: str = "needle_photo.jpg"):
+    """Capture a photo using the phone's front (1) or back (0) camera and save it into the Download folder or Home directory."""
+    if filename.startswith("~"):
+        target_path = os.path.expanduser(filename)
+    elif os.path.isabs(filename):
+        target_path = filename
+    else:
+        termux_downloads = os.path.expanduser("~/storage/downloads")
+        termux_shared_downloads = os.path.expanduser("~/storage/shared/Download")
+        if os.path.exists(termux_downloads):
+            target_path = os.path.join(termux_downloads, filename)
+        elif os.path.exists(termux_shared_downloads):
+            target_path = os.path.join(termux_shared_downloads, filename)
+        else:
+            target_path = os.path.expanduser(os.path.join("~", filename))
+
+    os.makedirs(os.path.dirname(target_path), exist_ok=True)
     
-    print(f"-> Calling Tool: take_camera_photo(camera_id={camera_id}, filename='{filename}')")
-    return run_cmd(["termux-camera-photo", "-c", str(camera_id), filename])
+    print(f"-> Calling Tool: take_camera_photo(camera_id={camera_id}, filename='{target_path}')")
+    return run_cmd(["termux-camera-photo", "-c", str(camera_id), target_path])
 
 @needle.tool
 def get_sms_messages(limit: int = 5):
