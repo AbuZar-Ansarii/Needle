@@ -1,5 +1,9 @@
 import os
 import sys
+import time
+import faulthandler
+
+faulthandler.enable()
 
 # Automatically prepend Termux binaries path to system environment PATH
 TERMUX_BIN_PATH = "/data/data/com.termux/files/usr/bin"
@@ -1526,12 +1530,13 @@ def start_telegram_bot(token):
         print("[Telegram] Error: telebot library is not available. Install with 'pip install pyTelegramBotAPI'", file=sys.stderr)
         return
     try:
-        bot = telebot.TeleBot(token)
-        print(f"[Telegram] Bot listener running. Connected to bot.")
+        # Disable multi-threading pools in telebot to prevent C-level OpenSSL SIGSEGV in Termux bionic libc
+        bot = telebot.TeleBot(token, threaded=False)
+        print(f"[Telegram] Bot listener running safely. Connected to Telegram.")
 
         @bot.message_handler(func=lambda message: True)
         def handle_telegram_message(message):
-            query = message.text.strip()
+            query = message.text.strip() if message.text else ""
             print(f"[Telegram] Message received: '{query}'")
             if not query:
                 return
@@ -1561,9 +1566,18 @@ def start_telegram_bot(token):
 
                 bot.reply_to(message, reply, parse_mode="Markdown")
             except Exception as err:
-                bot.reply_to(message, f"❌ *Error executing command:*\n`{str(err)}`", parse_mode="Markdown")
+                try:
+                    bot.reply_to(message, f"❌ *Error executing command:*\n`{str(err)}`")
+                except Exception:
+                    pass
 
-        bot.infinity_polling()
+        # Use robust single-threaded polling loop to prevent Segmentation Faults in Termux
+        while True:
+            try:
+                bot.polling(non_stop=True, interval=1, timeout=10)
+            except Exception as e:
+                print(f"[Telegram Polling Exception] {e}", file=sys.stderr)
+                time.sleep(3)
     except Exception as exc:
         print(f"[Telegram Error] Failed to run bot listener: {exc}", file=sys.stderr)
 
