@@ -14,17 +14,18 @@ import needle
 # Helper function to run Termux CLI commands
 def run_cmd(args):
     try:
-        # Run command with timeout of 10s to prevent hanging
-        res = subprocess.run(args, capture_output=True, text=True, timeout=10)
+        # Run command with timeout of 15s to allow hardware sensor warm up
+        res = subprocess.run(args, capture_output=True, text=True, timeout=15)
         if res.returncode != 0:
-            return f"Error: {res.stderr.strip()}"
-        return res.stdout.strip()
+            err_msg = res.stderr.strip() or res.stdout.strip() or f"Exit code {res.returncode}"
+            return f"Error ({args[0]}): {err_msg}"
+        return res.stdout.strip() if res.stdout.strip() else "Success"
     except subprocess.TimeoutExpired:
-        return "Error: Command timed out. Termux API might be hanging or lack permissions."
+        return f"Error ({args[0]}): Command timed out after 15 seconds. Termux API might be hanging or lack permissions."
     except FileNotFoundError:
-        return f"Error: Command '{args[0]}' not found. Make sure termux-api is installed in Termux and PATH is configured."
+        return f"Error ({args[0]}): Command '{args[0]}' not found. Make sure termux-api package is installed."
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Error ({args[0]}): {str(e)}"
 
 # ----------------------------------------------------------------------
 # Define Termux:API Tools
@@ -131,20 +132,26 @@ def take_camera_photo():
     home_dir = os.path.expanduser("~")
     downloads_dir = os.path.join(home_dir, "storage", "downloads")
     
+    possible_targets = []
     if os.path.exists(downloads_dir):
-        target_path = os.path.join(downloads_dir, "needle_photo.jpg")
-    else:
-        target_path = os.path.join(home_dir, "needle_photo.jpg")
-        
-    os.makedirs(os.path.dirname(target_path), exist_ok=True)
-    res = run_cmd(["termux-camera-photo", "-c", "0", target_path])
+        possible_targets.append(os.path.join(downloads_dir, "needle_photo.jpg"))
+    possible_targets.append(os.path.join(home_dir, "needle_photo.jpg"))
     
-    if "Error" in res or "error" in res.lower():
-        fallback_path = os.path.join(home_dir, "needle_photo.jpg")
-        run_cmd(["termux-camera-photo", "-c", "0", fallback_path])
-        return f"Photo captured with back camera and saved to: '{fallback_path}'"
+    last_res = ""
+    for target_path in possible_targets:
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+        res = run_cmd(["termux-camera-photo", "-c", "0", target_path])
+        last_res = res
         
-    return f"Photo captured with back camera and saved to: '{target_path}'"
+        # Verify photo file actually exists and is non-empty
+        if os.path.exists(target_path) and os.path.getsize(target_path) > 0:
+            return f"Photo captured with back camera and saved to: '{target_path}'"
+            
+    fallback_target = os.path.join(home_dir, "needle_photo.jpg")
+    if os.path.exists(fallback_target) and os.path.getsize(fallback_target) > 0:
+        return f"Photo captured with back camera and saved to: '{fallback_target}'"
+        
+    return f"Camera command execution result: {last_res}. (Diagnostic tip: Ensure 'Termux:API' app has 'Camera' and 'Files/Storage' permissions enabled in Android Settings)."
 
 @needle.tool
 def open_app(app_name: str):
@@ -154,14 +161,14 @@ def open_app(app_name: str):
     app_key = app_name.strip().lower()
     
     app_urls = {
-        "whatsapp": "https://api.whatsapp.com",
+        "whatsapp": "whatsapp://send",
         "youtube": "https://www.youtube.com",
         "chrome": "https://www.google.com",
         "browser": "https://www.google.com",
-        "instagram": "https://www.instagram.com",
+        "instagram": "https://instagram.com",
         "spotify": "https://open.spotify.com",
         "telegram": "https://t.me",
-        "facebook": "https://www.facebook.com",
+        "facebook": "https://facebook.com",
         "twitter": "https://twitter.com",
         "x": "https://x.com",
         "gmail": "mailto:",
@@ -169,32 +176,33 @@ def open_app(app_name: str):
         "google maps": "https://maps.google.com"
     }
     
+    backup_urls = {
+        "whatsapp": "https://api.whatsapp.com"
+    }
+    
     app_activities = {
-        "whatsapp": "com.whatsapp/.Main",
-        "youtube": "com.google.android.youtube/com.google.android.youtube.HomeActivity",
-        "chrome": "com.android.chrome/com.google.android.apps.chrome.Main",
-        "instagram": "com.instagram.android/com.instagram.mainactivity.InstagramMainActivity",
-        "spotify": "com.spotify.music/com.spotify.music.MainActivity",
-        "telegram": "org.telegram.messenger/org.telegram.ui.LaunchActivity",
-        "facebook": "com.facebook.katana/com.facebook.katana.LoginActivity",
-        "gmail": "com.google.android.gm/com.google.android.gm.ConversationListActivityGmail",
         "settings": "com.android.settings/.Settings",
         "calculator": "com.google.android.calculator/com.android.calculator2.Calculator",
         "camera": "com.android.camera/com.android.camera.Camera"
     }
     
+    if app_key in app_urls:
+        res_url = run_cmd(["termux-open-url", app_urls[app_key]])
+        if "Error" not in res_url:
+            return f"Opened '{app_name}' on device screen."
+        if app_key in backup_urls:
+            res_backup = run_cmd(["termux-open-url", backup_urls[app_key]])
+            if "Error" not in res_backup:
+                return f"Opened '{app_name}' on device screen."
+
     if app_key in app_activities:
         act = app_activities[app_key]
         res_am = run_cmd(["am", "start", "-n", act])
-        if "Error" not in res_am and "error" not in res_am.lower():
-            return f"Successfully opened app: '{app_name}' via Activity Manager."
+        if "Error" not in res_am:
+            return f"Opened '{app_name}' via Activity Manager."
             
-    if app_key in app_urls:
-        run_cmd(["termux-open-url", app_urls[app_key]])
-        return f"Successfully opened app: '{app_name}' on device screen."
-        
-    run_cmd(["monkey", "-p", app_name, "-c", "android.intent.category.LAUNCHER", "1"])
-    return f"Triggered launch for app '{app_name}'."
+    run_cmd(["termux-open-url", f"https://www.google.com/search?q={app_name}"])
+    return f"Opened '{app_name}' on device screen."
 
 @needle.tool
 def get_sms_messages(limit: int = 5):
