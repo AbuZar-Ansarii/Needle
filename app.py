@@ -286,28 +286,27 @@ def take_camera_photo():
     """Capture a photo using the phone's back camera and save it directly to the Download folder."""
     print("[Agent Triggered Tool] take_camera_photo()")
     home_dir = os.path.expanduser("~")
-    downloads_dir = os.path.join(home_dir, "storage", "downloads")
     
-    possible_targets = []
-    if os.path.exists(downloads_dir):
-        possible_targets.append(os.path.join(downloads_dir, "needle_photo.jpg"))
-    possible_targets.append(os.path.join(home_dir, "needle_photo.jpg"))
+    possible_targets = [
+        "/sdcard/Download/needle_photo.jpg",
+        os.path.join(home_dir, "storage", "downloads", "needle_photo.jpg"),
+        os.path.join(home_dir, "needle_photo.jpg")
+    ]
     
     last_res = ""
     for target_path in possible_targets:
-        os.makedirs(os.path.dirname(target_path), exist_ok=True)
-        res = run_cmd(["termux-camera-photo", "-c", "0", target_path])
-        last_res = res
-        
-        # Verify photo file actually exists and is non-empty
-        if os.path.exists(target_path) and os.path.getsize(target_path) > 0:
-            return f"Photo captured with back camera and saved to: '{target_path}'"
+        try:
+            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+            res = run_cmd(["termux-camera-photo", "-c", "0", target_path])
+            last_res = res
             
-    fallback_target = os.path.join(home_dir, "needle_photo.jpg")
-    if os.path.exists(fallback_target) and os.path.getsize(fallback_target) > 0:
-        return f"Photo captured with back camera and saved to: '{fallback_target}'"
-        
-    return f"Camera command execution result: {last_res}. (Diagnostic tip: Ensure 'Termux:API' app has 'Camera' and 'Files/Storage' permissions enabled in Android Settings)."
+            # Verify photo file actually exists and is non-empty
+            if os.path.exists(target_path) and os.path.getsize(target_path) > 0:
+                return f"Photo captured with back camera and saved to: '{target_path}'"
+        except Exception as e:
+            last_res = str(e)
+            
+    return f"Camera capture failed ({last_res}). Tip: Ensure 'Termux:API' app has 'Camera' and 'Files/Storage' permissions enabled in Android Settings."
 
 @needle.tool
 def open_app(app_name: str):
@@ -316,49 +315,60 @@ def open_app(app_name: str):
     
     app_key = app_name.strip().lower()
     
+    am_intents = {
+        "whatsapp": ["am", "start", "-a", "android.intent.action.VIEW", "-d", "whatsapp://"],
+        "youtube": ["am", "start", "-a", "android.intent.action.VIEW", "-d", "https://www.youtube.com"],
+        "chrome": ["am", "start", "-a", "android.intent.action.VIEW", "-d", "https://www.google.com"],
+        "browser": ["am", "start", "-a", "android.intent.action.VIEW", "-d", "https://www.google.com"],
+        "instagram": ["am", "start", "-a", "android.intent.action.VIEW", "-d", "https://instagram.com"],
+        "spotify": ["am", "start", "-a", "android.intent.action.VIEW", "-d", "https://open.spotify.com"],
+        "telegram": ["am", "start", "-a", "android.intent.action.VIEW", "-d", "https://t.me"],
+        "facebook": ["am", "start", "-a", "android.intent.action.VIEW", "-d", "https://facebook.com"],
+        "twitter": ["am", "start", "-a", "android.intent.action.VIEW", "-d", "https://twitter.com"],
+        "x": ["am", "start", "-a", "android.intent.action.VIEW", "-d", "https://x.com"],
+        "gmail": ["am", "start", "-a", "android.intent.action.VIEW", "-d", "mailto:"],
+        "maps": ["am", "start", "-a", "android.intent.action.VIEW", "-d", "https://maps.google.com"],
+        "google maps": ["am", "start", "-a", "android.intent.action.VIEW", "-d", "https://maps.google.com"],
+        "settings": ["am", "start", "-n", "com.android.settings/.Settings"],
+        "calculator": ["am", "start", "-n", "com.google.android.calculator/com.android.calculator2.Calculator"],
+        "camera": ["am", "start", "-a", "android.media.action.IMAGE_CAPTURE"]
+    }
+
+    am_activities = {
+        "whatsapp": ["am", "start", "-n", "com.whatsapp/.HomeActivity"],
+        "youtube": ["am", "start", "-n", "com.google.android.youtube/com.google.android.youtube.PlayerActivity"],
+        "chrome": ["am", "start", "-n", "com.android.chrome/com.google.android.apps.chrome.Main"],
+        "instagram": ["am", "start", "-n", "com.instagram.android/com.instagram.mainactivity.LauncherActivity"],
+        "spotify": ["am", "start", "-n", "com.spotify.music/com.spotify.music.MainActivity"],
+        "telegram": ["am", "start", "-n", "org.telegram.messenger/org.telegram.ui.LaunchActivity"]
+    }
+
     app_urls = {
-        "whatsapp": "whatsapp://send",
+        "whatsapp": "whatsapp://",
         "youtube": "https://www.youtube.com",
         "chrome": "https://www.google.com",
-        "browser": "https://www.google.com",
         "instagram": "https://instagram.com",
         "spotify": "https://open.spotify.com",
-        "telegram": "https://t.me",
-        "facebook": "https://facebook.com",
-        "twitter": "https://twitter.com",
-        "x": "https://x.com",
-        "gmail": "mailto:",
-        "maps": "https://maps.google.com",
-        "google maps": "https://maps.google.com"
+        "telegram": "https://t.me"
     }
-    
-    backup_urls = {
-        "whatsapp": "https://api.whatsapp.com"
-    }
-    
-    app_activities = {
-        "settings": "com.android.settings/.Settings",
-        "calculator": "com.google.android.calculator/com.android.calculator2.Calculator",
-        "camera": "com.android.camera/com.android.camera.Camera"
-    }
-    
+
+    if app_key in am_intents:
+        res_am = run_cmd(am_intents[app_key])
+        if "Error" not in res_am:
+            return f"Successfully opened {app_name} on your phone screen."
+
+    if app_key in am_activities:
+        res_act = run_cmd(am_activities[app_key])
+        if "Error" not in res_act:
+            return f"Successfully opened {app_name} on your phone screen."
+
     if app_key in app_urls:
         res_url = run_cmd(["termux-open-url", app_urls[app_key]])
         if "Error" not in res_url:
-            return f"Opened '{app_name}' on device screen."
-        if app_key in backup_urls:
-            res_backup = run_cmd(["termux-open-url", backup_urls[app_key]])
-            if "Error" not in res_backup:
-                return f"Opened '{app_name}' on device screen."
+            return f"Opened {app_name} on your phone screen."
 
-    if app_key in app_activities:
-        act = app_activities[app_key]
-        res_am = run_cmd(["am", "start", "-n", act])
-        if "Error" not in res_am:
-            return f"Opened '{app_name}' via Activity Manager."
-            
-    run_cmd(["termux-open-url", f"https://www.google.com/search?q={app_name}"])
-    return f"Opened '{app_name}' on device screen."
+    run_cmd(["monkey", "-p", app_name, "-c", "android.intent.category.LAUNCHER", "1"])
+    return f"Triggered launch for '{app_name}'."
 
 @needle.tool
 def get_sms_messages(limit: int = 5):
