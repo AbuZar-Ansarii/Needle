@@ -1,7 +1,7 @@
 # Termux Agentic Assistant (Needle LLM)
 
 An ultra-lightweight, local agentic assistant for Android/Termux that controls phone hardware and parses queries in plain English. Powered by Cactus Compute's **Needle (14MB)** local LLM.
-<img width="2880" height="1620" alt="14 mb agentic llm" src="https://github.com/user-attachments/assets/8453d53a-71f4-49bf-90b6-35c5b7524bbe" />(https://youtu.be/xiZ3LbOfAh8?si=FvSEW7hxTwoj3IdO)
+<img width="2880" height="1620" alt="14 mb agentic llm" src="https://github.com/user-attachments/assets/8453d53a-71f4-49bf-90b6-35c5b7524bbe" />[https://youtu.be/xiZ3LbOfAh8?si=FvSEW7hxTwoj3IdO]
 
 ---
 
