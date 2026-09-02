@@ -37,6 +37,7 @@ Make sure you have the [Termux:API app](https://f-droid.org/en/packages/com.term
 
 ### 2. Install  Dependencies
 ```
+apt update && apt upgrade
 apt install git python3 python3-pip python3-venv -y
 ```
 
