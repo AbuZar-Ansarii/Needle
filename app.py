@@ -178,6 +178,59 @@ def run_cmd(args):
                 {"bssid": "aa:bb:cc:dd:ee:ff", "frequency_mhz": 5240, "rssi": -55, "ssid": "Home-Network_5G", "timestamp_ms": 1725100000000},
                 {"bssid": "11:22:33:44:55:66", "frequency_mhz": 2412, "rssi": -72, "ssid": "Cafe_Free_Wifi", "timestamp_ms": 1725100000000}
             ])
+        elif cmd == "termux-wifi-enable":
+            st = args[1] if len(args) > 1 else "true"
+            return f"[Simulated Wi-Fi] Wi-Fi set to {st.upper()}"
+        elif cmd == "termux-media-player":
+            subcmd = args[1] if len(args) > 1 else "info"
+            if subcmd == "play":
+                track = args[2] if len(args) > 2 else "local_audio.mp3"
+                return f"[Simulated Media] Playing audio: {track}"
+            elif subcmd in ("pause", "stop"):
+                return f"[Simulated Media] Audio playback {subcmd}ped."
+            else:
+                return json.dumps({"status": "playing", "track": "Simulated Track.mp3", "position": "01:24"})
+        elif cmd == "termux-sensor":
+            s_name = args[args.index("-s") + 1] if "-s" in args and args.index("-s") + 1 < len(args) else "accelerometer"
+            return json.dumps({
+                s_name: {
+                    "values": [0.12, 9.81, 0.45],
+                    "unit": "m/s^2",
+                    "timestamp": 1725100000
+                }
+            })
+        elif cmd == "termux-dialog":
+            return json.dumps({"code": 0, "text": "Confirmed by user on screen"})
+        elif cmd == "termux-wallpaper":
+            f_idx = args.index("-f") + 1 if "-f" in args else -1
+            f_path = args[f_idx] if f_idx != -1 and f_idx < len(args) else "wallpaper.jpg"
+            return f"[Simulated Wallpaper] Wallpaper set to: {f_path}"
+        elif cmd in ("termux-wake-lock", "termux-wake-unlock"):
+            action = "acquired" if "lock" in cmd and "unlock" not in cmd else "released"
+            return f"[Simulated Power] System wake lock {action}."
+        elif cmd == "screencap":
+            return "[Simulated Display] Screenshot captured and saved to /sdcard/Download/screenshot.png"
+        elif cmd == "input":
+            return f"[Simulated Input] Simulated button/key event: {' '.join(args[1:])}"
+        elif cmd == "termux-telephony-cellinfo":
+            return json.dumps([
+                {"type": "LTE", "registered": True, "cid": 2854913, "lac": 1421, "mcc": 310, "mnc": 260, "rssi": -72, "rsrp": -95}
+            ])
+        elif cmd == "termux-audio-info":
+            return json.dumps({
+                "bluetooth_a2dp_connected": False,
+                "wired_headset": True,
+                "is_microphone_muted": False,
+                "music_volume": 11,
+                "call_volume": 4
+            })
+        elif cmd == "termux-nfc":
+            return json.dumps({
+                "status": "read_success",
+                "tag_id": "04:B2:71:A9:1C:80",
+                "standard": "ISO/IEC 14443-A",
+                "technologies": ["NfcA", "MifareUltralight", "NdefFormatable"]
+            })
         elif cmd in ("monkey", "am"):
             if cmd == "monkey":
                 pkg = args[args.index("-p") + 1] if "-p" in args and args.index("-p") + 1 < len(args) else "app"
@@ -521,10 +574,234 @@ def scan_wifi_networks():
         return res
 
 
+@needle.tool
+def set_wifi_state(enable: bool):
+    """Turn the phone device's Wi-Fi radio ON (True) or OFF (False)."""
+    print(f"[Agent Triggered Tool] set_wifi_state(enable={enable})")
+    state = "true" if enable else "false"
+    return run_cmd(["termux-wifi-enable", state])
+
+@needle.tool
+def control_media(action: str, file_path: str = ""):
+    """Control audio and media playback on the device. Valid actions: 'play', 'pause', 'stop', 'info'. Provide file_path when playing audio."""
+    print(f"[Agent Triggered Tool] control_media(action='{action}', file_path='{file_path}')")
+    act = action.strip().lower()
+    if act == "play" and file_path:
+        return run_cmd(["termux-media-player", "play", file_path])
+    elif act in ("play", "pause", "stop", "info"):
+        res = run_cmd(["termux-media-player", act])
+        try:
+            return json.loads(res)
+        except Exception:
+            return res
+    return f"Unsupported media action '{action}'. Valid choices: play, pause, stop, info."
+
+@needle.tool
+def get_sensors(sensor_name: str = "all"):
+    """Read live hardware sensor data from the phone (accelerometer, light, proximity, gyroscope, step_counter, temperature, or 'all')."""
+    print(f"[Agent Triggered Tool] get_sensors(sensor_name='{sensor_name}')")
+    cmd = ["termux-sensor", "-n", "1"]
+    if sensor_name and sensor_name.lower() != "all":
+        cmd.extend(["-s", sensor_name])
+    else:
+        cmd.extend(["-a"])
+    res = run_cmd(cmd)
+    try:
+        return json.loads(res)
+    except Exception:
+        return res
+
+@needle.tool
+def show_dialog(title: str, text: str = "Please confirm", dialog_type: str = "confirm"):
+    """Display an interactive dialog prompt on the phone screen (e.g. 'confirm' with Yes/No, or 'text' input) and return user response."""
+    print(f"[Agent Triggered Tool] show_dialog(title='{title}', text='{text}', dialog_type='{dialog_type}')")
+    dtype = dialog_type.strip().lower()
+    if dtype == "text":
+        res = run_cmd(["termux-dialog", "text", "-t", title, "-i", text])
+    else:
+        res = run_cmd(["termux-dialog", "confirm", "-t", title, "-i", text])
+    try:
+        return json.loads(res)
+    except Exception:
+        return res
+
+@needle.tool
+def set_wallpaper(file_path: str, lockscreen: bool = False):
+    """Change the phone's wallpaper from a local image file. Set lockscreen=True to change lockscreen wallpaper instead of homescreen."""
+    print(f"[Agent Triggered Tool] set_wallpaper(file_path='{file_path}', lockscreen={lockscreen})")
+    cmd = ["termux-wallpaper", "-f", file_path]
+    if lockscreen:
+        cmd.append("-l")
+    return run_cmd(cmd)
+
+@needle.tool
+def manage_wake_lock(lock: bool = True):
+    """Acquire (True) or release (False) a system wake lock to keep the phone CPU awake during long-running tasks."""
+    print(f"[Agent Triggered Tool] manage_wake_lock(lock={lock})")
+    return run_cmd(["termux-wake-lock"] if lock else ["termux-wake-unlock"])
+
+@needle.tool
+def send_key_event(key: str):
+    """Simulate a physical button or navigation keypress on the phone. Supported keys: 'home', 'back', 'volume_up', 'volume_down', 'power', 'play_pause', 'menu', 'enter'."""
+    print(f"[Agent Triggered Tool] send_key_event(key='{key}')")
+    key_codes = {
+        "home": "3",
+        "back": "4",
+        "volume_up": "24",
+        "volume_down": "25",
+        "power": "26",
+        "menu": "82",
+        "play_pause": "85",
+        "enter": "66",
+        "wake": "224"
+    }
+    k = key.strip().lower().replace(" ", "_")
+    code = key_codes.get(k, k)
+    return run_cmd(["input", "keyevent", str(code)])
+
+@needle.tool
+def take_screenshot():
+    """Capture a screenshot of the phone screen and save it to the Download folder."""
+    print("[Agent Triggered Tool] take_screenshot()")
+    target = "/sdcard/Download/screenshot.png"
+    res = run_cmd(["screencap", "-p", target])
+    if os.path.exists(target) and os.path.getsize(target) > 0:
+        return f"Screenshot captured successfully and saved to: '{target}'"
+    return f"Screenshot saved: {res} (Saved to {target})"
+
+@needle.tool
+def get_cell_tower_info():
+    """Retrieve details on nearby cellular base station towers, signal strength (RSSI, RSRP), and cell IDs."""
+    print("[Agent Triggered Tool] get_cell_tower_info()")
+    res = run_cmd(["termux-telephony-cellinfo"])
+    try:
+        return json.loads(res)
+    except Exception:
+        return res
+
+@needle.tool
+def get_audio_hardware_info():
+    """Check phone audio routing (whether wired headphones or Bluetooth A2DP headphones are plugged in, microphone state)."""
+    print("[Agent Triggered Tool] get_audio_hardware_info()")
+    res = run_cmd(["termux-audio-info"])
+    try:
+        return json.loads(res)
+    except Exception:
+        return res
+
+@needle.tool
+def read_nfc():
+    """Scan for nearby NFC tags or RFID smart cards touching the back of the phone."""
+    print("[Agent Triggered Tool] read_nfc()")
+    res = run_cmd(["termux-nfc", "-r"])
+    try:
+        return json.loads(res)
+    except Exception:
+        return res
+
+@needle.tool
+def extract_structured_data(text: str, extraction_type: str = "general"):
+    """Extract structured data (event, contact, reminder, expense, task) from messy unstructured text using Needle 3's grammar-constrained extraction."""
+    print(f"[Agent Triggered Tool] extract_structured_data(extraction_type='{extraction_type}')")
+    schema_map = {
+        "event": {
+            "title": "string",
+            "date": "string",
+            "time": "string",
+            "location": "string"
+        },
+        "contact": {
+            "name": "string",
+            "phone": "string",
+            "email": "string"
+        },
+        "reminder": {
+            "task": "string",
+            "due_date": "string",
+            "priority": "string"
+        },
+        "expense": {
+            "vendor": "string",
+            "amount": "string",
+            "category": "string"
+        },
+        "general": {
+            "summary": "string",
+            "action_items": "list of strings"
+        }
+    }
+    schema = schema_map.get(extraction_type.lower(), schema_map["general"])
+    try:
+        current_agent = get_agent()
+        if hasattr(current_agent, "extract") and getattr(current_agent, "_generation", 3) >= 3:
+            extracted = current_agent.extract(text, schema=schema)
+            if extracted:
+                return extracted
+    except Exception:
+        pass
+    return {"extraction_type": extraction_type, "schema": schema, "source_text": text, "status": "processed"}
+
+@needle.tool
+def semantic_phone_search(query: str, target: str = "all"):
+    """Perform on-device semantic search over phone data (contacts, SMS inbox, call log) using Needle 3 embeddings to find relevant records even if exact words don't match."""
+    print(f"[Agent Triggered Tool] semantic_phone_search(query='{query}', target='{target}')")
+    items = []
+    t = target.lower()
+    if t in ("all", "contacts"):
+        c_raw = run_cmd(["termux-contact-list"])
+        try:
+            for c in json.loads(c_raw):
+                items.append(f"Contact: {c.get('name', '')} (Phone: {c.get('number', '')})")
+        except Exception:
+            pass
+            
+    if t in ("all", "sms"):
+        s_raw = run_cmd(["termux-sms-list", "-l", "10"])
+        try:
+            for s in json.loads(s_raw):
+                items.append(f"SMS from {s.get('address', '')}: \"{s.get('body', '')}\" on {s.get('date', '')}")
+        except Exception:
+            pass
+
+    if t in ("all", "calls"):
+        cl_raw = run_cmd(["termux-call-log", "-l", "10"])
+        try:
+            for cl in json.loads(cl_raw):
+                items.append(f"Call {cl.get('type', '')} with {cl.get('name', cl.get('number', ''))} for {cl.get('duration', '')}")
+        except Exception:
+            pass
+
+    if not items:
+        return "No phone records available to search."
+
+    try:
+        current_agent = get_agent()
+        if hasattr(current_agent, "embed") and getattr(current_agent, "_generation", 3) >= 3:
+            import math
+            def cosine_sim(v1, v2):
+                dot = sum(a * b for a, b in zip(v1, v2))
+                m1 = math.sqrt(sum(a * a for a in v1))
+                m2 = math.sqrt(sum(b * b for b in v2))
+                return dot / (m1 * m2 + 1e-9)
+
+            query_vec = current_agent.embed(query)
+            scored = []
+            for it in items:
+                it_vec = current_agent.embed(it)
+                sim = cosine_sim(query_vec, it_vec)
+                scored.append((sim, it))
+            scored.sort(key=lambda x: x[0], reverse=True)
+            return [f"[{round(sim*100)}% match] {it}" for sim, it in scored[:5]]
+    except Exception:
+        pass
+
+    q_words = [w.lower() for w in query.split() if len(w) > 2]
+    matched = [it for it in items if any(w in it.lower() for w in q_words)]
+    return matched[:5] if matched else items[:3]
+
 # ----------------------------------------------------------------------
-# Initialize the Needle Agent
+# Initialize the Needle Agent (Supports Needle 2 and Needle 3)
 # ----------------------------------------------------------------------
-print("Loading local Needle model (14MB)...")
 tools_list = [
     show_toast, show_notification, get_battery_status, 
     text_to_speech, set_clipboard, get_clipboard, 
@@ -534,10 +811,59 @@ tools_list = [
     set_screen_brightness, get_volume_info, set_volume, share_content,
     get_call_log, authenticate_fingerprint, record_audio_start,
     record_audio_stop, get_telephony_info, scan_wifi_networks,
-    open_app
+    open_app, set_wifi_state, control_media, get_sensors,
+    show_dialog, set_wallpaper, manage_wake_lock, send_key_event,
+    take_screenshot, get_cell_tower_info, get_audio_hardware_info,
+    read_nfc, extract_structured_data, semantic_phone_search
 ]
-agent = needle.Needle(tools=tools_list)
-print("Needle model active and ready!")
+
+def get_initial_generation():
+    for idx, arg in enumerate(sys.argv):
+        if arg in ("--model", "--generation", "-m") and idx + 1 < len(sys.argv):
+            try:
+                val = int(sys.argv[idx + 1])
+                if val in (2, 3):
+                    return val
+            except ValueError:
+                pass
+    env_val = os.environ.get("NEEDLE_MODEL") or os.environ.get("NEEDLE_GENERATION")
+    if env_val:
+        try:
+            val = int(env_val)
+            if val in (2, 3):
+                return val
+        except ValueError:
+            pass
+    return 3
+
+active_generation = get_initial_generation()
+loaded_agents = {}
+agent_lock = threading.Lock()
+
+def get_agent(gen=None):
+    global active_generation
+    target_gen = int(gen if gen is not None else active_generation)
+    if target_gen not in (2, 3):
+        target_gen = 3
+    with agent_lock:
+        if target_gen not in loaded_agents:
+            desc = "Needle 3 (Laddered SAN Foundation)" if target_gen == 3 else "Needle 2 (Legacy 14MB Core)"
+            print(f"Loading {desc}...")
+            loaded_agents[target_gen] = needle.Needle(tools=tools_list, generation=target_gen)
+            print(f"{desc} active and ready!")
+        return loaded_agents[target_gen]
+
+def set_active_generation(gen):
+    global active_generation, agent
+    val = int(gen)
+    if val not in (2, 3):
+        raise ValueError("Invalid model generation. Choose 2 (Needle 2) or 3 (Needle 3).")
+    agent = get_agent(val)
+    active_generation = val
+    return active_generation
+
+# Eagerly initialize the default agent at startup
+agent = get_agent(active_generation)
 
 
 # ----------------------------------------------------------------------
@@ -628,6 +954,52 @@ HTML_TEMPLATE = """
             color: var(--text-muted);
             text-transform: uppercase;
             letter-spacing: 0.5px;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 0.85rem;
+        }
+
+        .model-selector-group {
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border-subtle);
+            padding: 0.25rem 0.35rem;
+            border-radius: 20px;
+        }
+
+        .model-label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-left: 0.4rem;
+            font-weight: 500;
+        }
+
+        .model-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            padding: 0.25rem 0.65rem;
+            border-radius: 14px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .model-btn:hover {
+            color: var(--text-main);
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .model-btn.active {
+            background: var(--primary);
+            color: #ffffff;
+            box-shadow: 0 0 10px var(--primary-glow);
         }
 
         .status-container {
@@ -1087,12 +1459,19 @@ HTML_TEMPLATE = """
             <div class="logo-mark">▲</div>
             <div class="logo-text">
                 <h1>Termux Agent Hub</h1>
-                <span>Needle 14MB Core v2.0</span>
+                <span id="modelBadge">Needle Core v{{ active_model }}.0</span>
             </div>
         </div>
-        <div class="status-container">
-            <div class="status-dot"></div>
-            <span>Online</span>
+        <div class="header-right">
+            <div class="model-selector-group">
+                <span class="model-label">Model:</span>
+                <button class="model-btn {% if active_model == 3 %}active{% endif %}" id="btnModel3" onclick="selectModel(3)">Needle 3</button>
+                <button class="model-btn {% if active_model == 2 %}active{% endif %}" id="btnModel2" onclick="selectModel(2)">Needle 2</button>
+            </div>
+            <div class="status-container">
+                <div class="status-dot"></div>
+                <span>Online</span>
+            </div>
         </div>
     </header>
 
@@ -1108,9 +1487,9 @@ HTML_TEMPLATE = """
                 <div class="chat-messages" id="chatMessages">
                     <div class="message agent">
                         <div class="bubble">
-                            Welcome. I am the local agentic runtime powered by Needle. Provide any system instructions, device actions, or query commands in natural language.
+                            Welcome. I am the local agentic runtime powered by Needle. You can seamlessly switch between Needle 3 (new) and Needle 2 (legacy) anytime. Provide any system instructions, device actions, or query commands in natural language.
                         </div>
-                        <div class="meta-info">Agent Core • System</div>
+                        <div class="meta-info" id="chatHeaderMeta">Agent Core • Needle v{{ active_model }}.0</div>
                     </div>
                 </div>
                 
@@ -1225,6 +1604,46 @@ HTML_TEMPLATE = """
                             <span class="tag-label">Apps</span>
                             <strong>Open Chrome</strong>
                         </button>
+                        <button class="trigger-card" onclick="submitCommand('Take a screenshot of the phone screen')">
+                            <span class="tag-label">Display</span>
+                            <strong>Take Screenshot</strong>
+                        </button>
+                        <button class="trigger-card" onclick="submitCommand('Read live phone hardware sensors data')">
+                            <span class="tag-label">Sensors</span>
+                            <strong>Hardware Sensors</strong>
+                        </button>
+                        <button class="trigger-card" onclick="submitCommand('Turn on device Wi-Fi')">
+                            <span class="tag-label">Network</span>
+                            <strong>Wi-Fi ON</strong>
+                        </button>
+                        <button class="trigger-card" onclick="submitCommand('Turn off device Wi-Fi')">
+                            <span class="tag-label">Network</span>
+                            <strong>Wi-Fi OFF</strong>
+                        </button>
+                        <button class="trigger-card" onclick="submitCommand('Get audio hardware routing info')">
+                            <span class="tag-label">Audio</span>
+                            <strong>Headset / Audio</strong>
+                        </button>
+                        <button class="trigger-card" onclick="submitCommand('Check cellular tower cellinfo')">
+                            <span class="tag-label">Telephony</span>
+                            <strong>Cell Tower Info</strong>
+                        </button>
+                        <button class="trigger-card" onclick="submitCommand('Acquire CPU wake lock')">
+                            <span class="tag-label">Power</span>
+                            <strong>Wake Lock</strong>
+                        </button>
+                        <button class="trigger-card" onclick="submitCommand('Scan for nearby NFC tags')">
+                            <span class="tag-label">NFC</span>
+                            <strong>Scan NFC</strong>
+                        </button>
+                        <button class="trigger-card" onclick="submitCommand('Semantically search contacts for doctor or emergency')">
+                            <span class="tag-label">Needle 3</span>
+                            <strong>Semantic Search</strong>
+                        </button>
+                        <button class="trigger-card" onclick="submitCommand('Extract contact info from: Call Alex Vance at +15550199 alex@city17.org')">
+                            <span class="tag-label">Needle 3</span>
+                            <strong>Extract Info</strong>
+                        </button>
                     </div>
                 </div>
 
@@ -1235,7 +1654,7 @@ HTML_TEMPLATE = """
                     </h2>
                     <div class="terminal-container" id="terminalLogs">
                         <div class="log-row"><span class="log-time-prefix">[System]</span> Production WSGI server active.</div>
-                        <div class="log-row"><span class="log-time-prefix">[System]</span> Loaded Needle local model (14MB).</div>
+                        <div class="log-row" id="initialModelLog"><span class="log-time-prefix">[System]</span> Active model: Needle v{{ active_model }}.0 Core.</div>
                     </div>
                 </div>
             </div>
@@ -1257,10 +1676,46 @@ HTML_TEMPLATE = """
             terminalLogs.scrollTop = terminalLogs.scrollHeight;
         }
 
+        async function selectModel(gen) {
+            try {
+                appendLog('System', `Switching active model to Needle ${gen}...`);
+                const res = await fetch('/api/model', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ generation: gen })
+                });
+                const data = await res.json();
+                if (data.status === 'ok') {
+                    const b2 = document.getElementById('btnModel2');
+                    const b3 = document.getElementById('btnModel3');
+                    if (b2) b2.classList.toggle('active', data.active_generation === 2);
+                    if (b3) b3.classList.toggle('active', data.active_generation === 3);
+                    const badge = document.getElementById('modelBadge');
+                    if (badge) badge.innerText = `Needle Core v${data.active_generation}.0`;
+                    const chatMeta = document.getElementById('chatHeaderMeta');
+                    if (chatMeta) chatMeta.innerText = `Agent Core • Needle v${data.active_generation}.0`;
+                    appendLog('System', `Model switched to Needle ${data.active_generation} (${data.description})`);
+                } else {
+                    appendLog('Error', `Failed to switch model: ${data.error || 'Unknown error'}`);
+                }
+            } catch (err) {
+                appendLog('Error', `Network error switching model: ${err.message}`);
+            }
+        }
+
         // Custom parser for rendering pretty tool outputs in chat bubbles
         function formatToolResult(res) {
             if (!res) return '';
             if (typeof res === 'string') {
+                if (res.toLowerCase().includes('screenshot')) {
+                    return `
+                        <div class="tool-result-item">
+                            <span class="tool-icon">📸</span> <strong>Screenshot Captured:</strong>
+                            <div style="margin-top: 0.5rem;"><img src="/screenshot.png?t=${Date.now()}" style="max-width: 100%; max-height: 250px; border-radius: 6px; border: 1px solid var(--border-subtle);" alt="Screenshot"></div>
+                            <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">${res}</div>
+                        </div>
+                    `;
+                }
                 return `<div class="tool-result-item"><span class="tool-icon">⚡</span> ${res}</div>`;
             }
             if (res.percentage !== undefined) {
@@ -1418,7 +1873,7 @@ HTML_TEMPLATE = """
                         ${reasoningHtml}
                         ${confidenceHtml}
                     </div>
-                    <div class="meta-info">Agent</div>
+                    <div class="meta-info">${data.model || 'Agent Core'}</div>
                 `;
 
                 chatMessages.appendChild(agentDiv);
@@ -1481,7 +1936,7 @@ def preprocess_query(query: str) -> str:
 
 @app.route("/")
 def index():
-    return render_template_string(HTML_TEMPLATE)
+    return render_template_string(HTML_TEMPLATE, active_model=active_generation)
 
 @app.route("/photo.jpg")
 def serve_photo():
@@ -1499,6 +1954,77 @@ def serve_photo():
             return send_file(photo_path, mimetype="image/jpeg")
     return "Photo not found", 404
 
+@app.route("/screenshot.png")
+def serve_screenshot():
+    possible_paths = [
+        "/sdcard/Download/screenshot.png",
+        os.path.expanduser("~/storage/downloads/screenshot.png"),
+        os.path.expanduser("~/screenshot.png"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "screenshot.png"),
+    ]
+    for p in possible_paths:
+        if os.path.exists(p):
+            from flask import send_file
+            return send_file(p, mimetype="image/png")
+    return "Screenshot not found", 404
+
+@app.route("/api/extract", methods=["POST"])
+def extract_api():
+    try:
+        data = request.get_json() or {}
+        text = data.get("text", "").strip()
+        schema_type = data.get("type", "general")
+        if not text:
+            return jsonify({"status": "error", "error": "Empty text parameter"}), 400
+        res = extract_structured_data(text, schema_type)
+        return jsonify({"status": "ok", "extracted": res})
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+@app.route("/api/embed", methods=["POST"])
+def embed_api():
+    try:
+        data = request.get_json() or {}
+        text = data.get("text", "").strip()
+        if not text:
+            return jsonify({"status": "error", "error": "Empty text parameter"}), 400
+        current_agent = get_agent()
+        if hasattr(current_agent, "embed") and getattr(current_agent, "_generation", 3) >= 3:
+            vec = current_agent.embed(text)
+            return jsonify({"status": "ok", "dimensions": len(vec), "vector_preview": vec[:8]})
+        return jsonify({"status": "error", "error": "Active model does not support embeddings (Needle 3 required)"}), 400
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+@app.route("/api/model", methods=["GET", "POST"])
+def model_api():
+    global active_generation
+    if request.method == "POST":
+        data = request.get_json() or {}
+        gen = data.get("generation") or data.get("model")
+        if not gen:
+            return jsonify({"status": "error", "error": "Missing generation parameter"}), 400
+        try:
+            val = int(gen)
+            set_active_generation(val)
+            desc = "Laddered SAN / High Accuracy" if val == 3 else "Legacy 14MB Core"
+            return jsonify({
+                "status": "ok",
+                "active_generation": active_generation,
+                "model_name": f"Needle {active_generation}",
+                "description": desc
+            })
+        except Exception as e:
+            return jsonify({"status": "error", "error": str(e)}), 400
+    else:
+        desc = "Laddered SAN / High Accuracy" if active_generation == 3 else "Legacy 14MB Core"
+        return jsonify({
+            "active_generation": active_generation,
+            "model_name": f"Needle {active_generation}",
+            "description": desc,
+            "available": [2, 3]
+        })
+
 @app.route("/api/chat", methods=["POST"])
 def chat_api():
     try:
@@ -1510,10 +2036,13 @@ def chat_api():
         # Preprocess query to wrap speech commands in quotes for correct parsing by Needle LLM
         processed_message = preprocess_query(user_message)
         # Invoke Needle model agent loop
-        res = agent.run(processed_message)
+        current_agent = get_agent()
+        res = current_agent.run(processed_message)
         
         return jsonify({
             "query": user_message,
+            "model": f"Needle {active_generation}",
+            "generation": active_generation,
             "type": res.get("type"),
             "reasoning": res.get("reasoning"),
             "confidence": res.get("confidence"),
@@ -1540,9 +2069,26 @@ def start_telegram_bot(token):
             print(f"[Telegram] Message received: '{query}'")
             if not query:
                 return
+
+            query_lower = query.lower()
+            if query_lower in ("/model", "/model help", "model"):
+                desc = "Laddered SAN / High Accuracy" if active_generation == 3 else "Legacy 14MB Core"
+                bot.reply_to(message, f"🤖 *Active Model:* Needle {active_generation} ({desc})\n\nTo switch models, send:\n• `/model 3` (Needle 3)\n• `/model 2` (Needle 2)", parse_mode="Markdown")
+                return
+
+            if query_lower in ("/model 2", "model 2", "/model 3", "model 3"):
+                target_gen = 2 if "2" in query_lower else 3
+                try:
+                    set_active_generation(target_gen)
+                    bot.reply_to(message, f"✅ Switched active model to *Needle {target_gen}*.", parse_mode="Markdown")
+                except Exception as e:
+                    bot.reply_to(message, f"❌ Failed to switch model: {e}", parse_mode="Markdown")
+                return
+
             try:
                 processed_query = preprocess_query(query)
-                res = agent.run(processed_query)
+                current_agent = get_agent()
+                res = current_agent.run(processed_query)
                 reasoning = res.get("reasoning", "")
                 confidence = res.get("confidence")
                 results = res.get("results") or []
@@ -1564,6 +2110,8 @@ def start_telegram_bot(token):
                 if confidence is not None:
                     reply += f"\n🎯 *Confidence:* {int(confidence * 100)}%"
 
+                reply += f"\n🤖 *Model:* Needle {active_generation}"
+
                 bot.reply_to(message, reply, parse_mode="Markdown")
             except Exception as err:
                 try:
@@ -1582,6 +2130,18 @@ def start_telegram_bot(token):
         print(f"[Telegram Error] Failed to run bot listener: {exc}", file=sys.stderr)
 
 if __name__ == "__main__":
+    # Check for --model / --generation / -m flag first
+    for idx, arg in enumerate(sys.argv):
+        if arg in ("--model", "--generation", "-m") and idx + 1 < len(sys.argv):
+            try:
+                m_val = int(sys.argv[idx + 1])
+                if m_val in (2, 3):
+                    set_active_generation(m_val)
+            except ValueError:
+                pass
+
+    print(f"[Engine] Termux Agent Hub initialized with Needle {active_generation} active.")
+
     # Check for --telegram flag or TELEGRAM_TOKEN env variable first
     telegram_token = os.environ.get("TELEGRAM_TOKEN")
     for idx, arg in enumerate(sys.argv):
