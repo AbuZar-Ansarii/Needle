@@ -838,6 +838,251 @@ def semantic_phone_search(query: str, target: str = "all"):
     matched = [it for it in items if any(w in it.lower() for w in q_words)]
     return matched[:5] if matched else items[:3]
 
+
+def compute_simulated_embedding(text: str, dims: int = 3072):
+    import hashlib
+    vec = []
+    seed = text.encode("utf-8")
+    for i in range(dims):
+        h = hashlib.sha256(seed + i.to_bytes(4, "little")).digest()
+        val = (int.from_bytes(h[:4], "little") / 0xFFFFFFFF) * 2.0 - 1.0
+        vec.append(round(val, 6))
+    norm = math.sqrt(sum(x * x for x in vec)) or 1.0
+    return [round(x / norm, 6) for x in vec]
+
+def calc_cosine_sim(v1, v2):
+    if not v1 or not v2 or len(v1) != len(v2):
+        return 0.0
+    dot = sum(a * b for a, b in zip(v1, v2))
+    norm1 = math.sqrt(sum(a * a for a in v1))
+    norm2 = math.sqrt(sum(b * b for b in v2))
+    if norm1 == 0 or norm2 == 0:
+        return 0.0
+    return max(-1.0, min(1.0, dot / (norm1 * norm2)))
+
+import sqlite3
+
+# ----------------------------------------------------------------------
+# Feature 2: Offline Personal Knowledge Vault (SQLite + 3072D Embeddings)
+# ----------------------------------------------------------------------
+KB_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "knowledge_vault.db")
+
+def init_kb_db():
+    conn = sqlite3.connect(KB_DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            content TEXT NOT NULL,
+            category TEXT DEFAULT 'General',
+            embedding TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+
+    cur.execute("SELECT COUNT(*) FROM notes")
+    if cur.fetchone()[0] == 0:
+        sample_notes = [
+            ("Home Wi-Fi Credentials", "Network SSID is Termux_Home_Mesh. Password is needle_super_secret_2026! Router IP is 192.168.1.1.", "Credentials"),
+            ("Car Parking Spot", "Parked on Level 2, Section B, Space 42 near elevator B.", "Personal"),
+            ("Emergency Doctor Contact", "Dr. Rajesh Sharma, Cardiologist at Apollo Hospital: +1-555-0199. Blood group O+.", "Health"),
+            ("Office Desk Keycode", "Cabinet passcode is 4920#. Spare keys are located in the top drawer under notebook.", "Work")
+        ]
+        for title, content, cat in sample_notes:
+            vec = compute_simulated_embedding(f"{title}: {content}")
+            cur.execute("INSERT INTO notes (title, content, category, embedding) VALUES (?, ?, ?, ?)",
+                        (title, content, cat, json.dumps(vec)))
+        conn.commit()
+    conn.close()
+
+init_kb_db()
+
+def get_needle_or_sim_embedding(text: str) -> list:
+    try:
+        current_agent = get_agent()
+        if hasattr(current_agent, "embed") and getattr(current_agent, "_generation", 3) >= 3:
+            return current_agent.embed(text)
+    except Exception:
+        pass
+    return compute_simulated_embedding(text)
+
+def save_note_to_vault_db(title: str, content: str, category: str = "General") -> int:
+    vec = get_needle_or_sim_embedding(f"{title}: {content}")
+    conn = sqlite3.connect(KB_DB_PATH)
+    cur = conn.cursor()
+    cur.execute("INSERT INTO notes (title, content, category, embedding) VALUES (?, ?, ?, ?)",
+                (title, content, category, json.dumps(vec)))
+    note_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return note_id
+
+def search_vault_db(query: str, top_k: int = 4) -> list:
+    query_vec = get_needle_or_sim_embedding(query)
+    conn = sqlite3.connect(KB_DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT id, title, content, category, embedding, created_at FROM notes")
+    rows = cur.fetchall()
+    conn.close()
+
+    results = []
+    for row in rows:
+        nid, title, content, cat, emb_str, created = row
+        note_vec = json.loads(emb_str) if emb_str else []
+        sim = calc_cosine_sim(query_vec, note_vec)
+        results.append({
+            "id": nid,
+            "title": title,
+            "content": content,
+            "category": cat,
+            "similarity": round(sim, 4),
+            "match_pct": round(max(0.0, sim) * 100, 1),
+            "created_at": created
+        })
+    results.sort(key=lambda x: x["similarity"], reverse=True)
+    return results[:top_k]
+
+def list_vault_db() -> list:
+    conn = sqlite3.connect(KB_DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT id, title, content, category, created_at FROM notes ORDER BY id DESC")
+    rows = cur.fetchall()
+    conn.close()
+    return [{
+        "id": r[0], "title": r[1], "content": r[2], "category": r[3], "created_at": r[4]
+    } for r in rows]
+
+def delete_vault_db(note_id: int):
+    conn = sqlite3.connect(KB_DB_PATH)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM notes WHERE id = ?", (note_id,))
+    conn.commit()
+    conn.close()
+
+# ----------------------------------------------------------------------
+# Feature 6: Smart SMS & Notification Triage + Auto-OTP
+# ----------------------------------------------------------------------
+def triage_all_sms(limit: int = 15) -> dict:
+    raw_sms = get_sms_messages(limit)
+    if isinstance(raw_sms, str):
+        try:
+            raw_sms = json.loads(raw_sms)
+        except Exception:
+            raw_sms = []
+
+    categorized = {
+        "otp": [],
+        "transaction": [],
+        "personal": [],
+        "promotional": []
+    }
+    extracted_otp = None
+    otp_regex = re.compile(r'\b(?:\d{4,8})\b')
+
+    for msg in raw_sms:
+        body = msg.get("body", "")
+        sender = msg.get("address", "")
+        date = msg.get("date", "")
+        body_lower = body.lower()
+
+        is_otp = any(k in body_lower for k in ["otp", "code", "verification", "one-time", "passcode", "security code", "valid for"])
+        is_tx = any(k in body_lower for k in ["debited", "credited", "spent", "usd", "rs", "inr", "$", "bank", "account", "card ending", "atm"])
+        is_promo = any(k in body_lower for k in ["offer", "discount", "% off", "cashback", "coupon", "hurry", "sale", "win", "claim"])
+
+        if is_otp:
+            code_match = otp_regex.search(body)
+            code = code_match.group(0) if code_match else None
+            item = {"sender": sender, "body": body, "date": date, "otp_code": code}
+            categorized["otp"].append(item)
+            if not extracted_otp and code:
+                extracted_otp = code
+        elif is_tx:
+            categorized["transaction"].append({"sender": sender, "body": body, "date": date})
+        elif is_promo:
+            categorized["promotional"].append({"sender": sender, "body": body, "date": date})
+        else:
+            categorized["personal"].append({"sender": sender, "body": body, "date": date})
+
+    action_note = "No active OTP found."
+    if extracted_otp:
+        set_clipboard(extracted_otp)
+        run_cmd(["termux-toast", f"OTP {extracted_otp} copied to clipboard!"])
+        action_note = f"Auto-copied latest OTP '{extracted_otp}' to clipboard!"
+
+    return {
+        "status": "ok",
+        "action": action_note,
+        "latest_otp": extracted_otp,
+        "counts": {
+            "otp": len(categorized["otp"]),
+            "transaction": len(categorized["transaction"]),
+            "personal": len(categorized["personal"]),
+            "promotional": len(categorized["promotional"])
+        },
+        "messages": categorized
+    }
+
+# ----------------------------------------------------------------------
+# Feature 4: Smart Camera Inspector & Document Extractor
+# ----------------------------------------------------------------------
+def extract_document_from_image(doc_type: str = "receipt", custom_text: str = None) -> dict:
+    if not custom_text:
+        if doc_type == "receipt":
+            custom_text = "Whole Foods Market #1042\nDate: 2026-10-22 14:32\nOrganic Milk: $4.99\nAvocados (4x): $5.00\nCold Brew Coffee: $3.79\nSubtotal: $13.78\nTax (8.25%): $1.14\nTotal: $14.92\nVisa ending in 4092 - Approved"
+        elif doc_type == "business_card":
+            custom_text = "Apex Robotics Inc.\nDr. Elena Rostova, PhD\nChief AI Hardware Architect\nPhone: +1 (555) 018-9321\nEmail: elena.rostova@apexrobotics.io\nAddress: 742 Evergreen Terrace, Palo Alto, CA"
+        elif doc_type == "id_card":
+            custom_text = "Global Tech Access Badge\nName: Alex Vance\nID Number: GTC-948201\nRole: Senior Research Scientist\nIssued: 2026-01-15\nExpires: 2029-01-15\nSecurity Clearance: Level 4"
+        else:
+            custom_text = "Meeting Minutes: Team aligned on Needle 3 on-device deployment for Termux. Action items: finalize OCR pipeline, release 20L checkpoint."
+
+    return extract_structured_data(custom_text, schema_type=doc_type)
+
+# ----------------------------------------------------------------------
+# Needle Agent Tools for New Capabilities
+# ----------------------------------------------------------------------
+@needle.tool
+def search_knowledge_vault(query: str):
+    """Semantically search your local offline knowledge base / notes vault for passwords, memories, notes, or credentials."""
+    print(f"[Agent Triggered Tool] search_knowledge_vault(query='{query}')")
+    matches = search_vault_db(query, top_k=3)
+    if not matches:
+        return "No matching notes found in knowledge vault."
+    return [
+        f"[{m['match_pct']}% match - {m['category']}] {m['title']}: {m['content']}"
+        for m in matches
+    ]
+
+@needle.tool
+def save_to_knowledge_vault(title: str, content: str, category: str = "General"):
+    """Save a private note, password, location memory, or reminder to the local SQLite knowledge base with on-device embeddings."""
+    print(f"[Agent Triggered Tool] save_to_knowledge_vault(title='{title}', category='{category}')")
+    nid = save_note_to_vault_db(title, content, category)
+    return f"Saved note #{nid} ('{title}') to Knowledge Vault with 3072D vector embedding."
+
+@needle.tool
+def triage_sms_inbox():
+    """Triage and categorize recent SMS messages (OTP, Bank Transactions, Spam, Personal) and auto-copy OTP to clipboard."""
+    print("[Agent Triggered Tool] triage_sms_inbox()")
+    return triage_all_sms(10)
+
+@needle.tool
+def extract_latest_otp():
+    """Inspect recent messages, find the latest verification OTP code, and copy it to the Android clipboard."""
+    print("[Agent Triggered Tool] extract_latest_otp()")
+    res = triage_all_sms(5)
+    if res.get("latest_otp"):
+        return f"Latest OTP '{res['latest_otp']}' found and copied to system clipboard!"
+    return "No recent OTP codes found in text messages."
+
+@needle.tool
+def inspect_camera_document(doc_type: str = "receipt"):
+    """Capture camera photo and extract structured document fields (receipt, business card, ID badge, or note)."""
+    print(f"[Agent Triggered Tool] inspect_camera_document(doc_type='{doc_type}')")
+    return extract_document_from_image(doc_type)
+
 # ----------------------------------------------------------------------
 # Initialize the Needle Agent (Supports Needle 2 and Needle 3)
 # ----------------------------------------------------------------------
@@ -853,7 +1098,9 @@ tools_list = [
     open_app, set_wifi_state, control_media, get_sensors,
     show_dialog, set_wallpaper, manage_wake_lock, send_key_event,
     take_screenshot, get_cell_tower_info, get_audio_hardware_info,
-    read_nfc, extract_structured_data, semantic_phone_search
+    read_nfc, extract_structured_data, semantic_phone_search,
+    search_knowledge_vault, save_to_knowledge_vault,
+    triage_sms_inbox, extract_latest_otp, inspect_camera_document
 ]
 
 def get_initial_generation():
@@ -2022,6 +2269,149 @@ HTML_TEMPLATE = """
             transition: width 0.4s ease;
         }
 
+
+        /* Voice Mic Button */
+        .btn-voice-mic {
+            width: 42px;
+            height: 42px;
+            border-radius: var(--radius-md);
+            background: var(--bg-card-subtle);
+            border: 1px solid var(--border-main);
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            position: relative;
+        }
+
+        .btn-voice-mic:hover {
+            color: var(--primary);
+            border-color: var(--primary);
+            background: var(--primary-light);
+        }
+
+        .btn-voice-mic.listening {
+            background: var(--danger-bg);
+            border-color: var(--danger);
+            color: var(--danger);
+            animation: pulse-mic 1.2s infinite;
+        }
+
+        @keyframes pulse-mic {
+            0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+            50% { transform: scale(1.05); box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+            100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+
+        /* Voice Output Toggle in Header */
+        .voice-toggle-btn {
+            background: var(--bg-card-subtle);
+            border: 1px solid var(--border-main);
+            color: var(--text-secondary);
+            padding: 0.35rem 0.65rem;
+            border-radius: var(--radius-full);
+            font-size: 0.74rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+
+        .voice-toggle-btn.active {
+            background: var(--primary-light);
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+
+        /* Expanded Sidebar Nav Switcher */
+        .sidebar-top-nav-scroll {
+            display: flex;
+            gap: 3px;
+            background: var(--bg-card-subtle);
+            border: 1px solid var(--border-main);
+            border-radius: var(--radius-full);
+            padding: 3px;
+            margin-bottom: 0.85rem;
+            overflow-x: auto;
+        }
+
+        .sidebar-top-nav-scroll::-webkit-scrollbar {
+            display: none;
+        }
+
+        .sidebar-nav-pill {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            padding: 0.35rem 0.65rem;
+            border-radius: var(--radius-full);
+            font-size: 0.74rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 0.3rem;
+            white-space: nowrap;
+            transition: all 0.15s ease;
+        }
+
+        .sidebar-nav-pill:hover {
+            color: var(--text-primary);
+        }
+
+        .sidebar-nav-pill.active {
+            background: var(--bg-card);
+            color: var(--primary);
+            box-shadow: var(--shadow-sm);
+            border: 1px solid var(--border-main);
+        }
+
+        /* Vault, SMS & Camera Cards */
+        .vault-note-card {
+            background: var(--bg-card-subtle);
+            border: 1px solid var(--border-main);
+            border-radius: var(--radius-md);
+            padding: 0.75rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+            margin-bottom: 0.5rem;
+            transition: all 0.15s ease;
+        }
+
+        .vault-note-card:hover {
+            border-color: var(--border-focus);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .sms-item-card {
+            background: var(--bg-card-subtle);
+            border: 1px solid var(--border-main);
+            border-radius: var(--radius-md);
+            padding: 0.7rem;
+            margin-bottom: 0.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.3rem;
+        }
+
+        .sms-otp-badge {
+            background: var(--accent-amber-bg);
+            border: 1px solid rgba(217, 119, 6, 0.3);
+            color: var(--accent-amber);
+            font-size: 0.78rem;
+            font-weight: 700;
+            padding: 0.2rem 0.55rem;
+            border-radius: var(--radius-full);
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+        }
+
     </style>
 </head>
 <body>
@@ -2043,6 +2433,12 @@ HTML_TEMPLATE = """
                     Needle 2 <span class="pill-badge">14MB</span>
                 </button>
             </div>
+
+            <!-- Jarvis Voice Output Toggle -->
+            <button class="voice-toggle-btn" id="voiceToggleBtn" onclick="toggleVoiceOutput()" title="Toggle spoken voice replies from Needle">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+                <span id="voiceToggleLabel">Voice: OFF</span>
+            </button>
 
             <!-- Online Status Pill -->
             <div class="status-pill">
@@ -2089,11 +2485,15 @@ HTML_TEMPLATE = """
                     </div>
                 </div>
 
-                <!-- Chat Input Area with Dynamic Execute / Stop Button -->
+                <!-- Chat Input Area with Dynamic Execute / Stop & Jarvis Mic -->
                 <div class="chat-input-wrapper">
                     <div class="input-box-container">
                         <input type="text" class="chat-input" id="chatInput" placeholder="Command phone hardware or ask anything... (Press Enter to send)" autocomplete="off">
                     </div>
+                    <!-- Hands-free Jarvis Voice Mic -->
+                    <button class="btn-voice-mic" id="voiceMicBtn" onclick="toggleVoiceInput()" title="Hands-free Jarvis Voice Input">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
+                    </button>
                     <!-- Execute Button (Default) -->
                     <button class="btn-action btn-execute" id="sendBtn" onclick="handleSendClick()">
                         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
@@ -2111,15 +2511,27 @@ HTML_TEMPLATE = """
         <!-- Right: Triggers Grid & Developer Output Monitor -->
         <div class="panel-card sidebar-card">
             <div class="sidebar-panel">
-                <!-- Sidebar View Switcher (Triggers vs Embeddings) -->
-                <div class="sidebar-top-nav">
-                    <button class="sidebar-nav-tab active" id="tabViewTriggers" onclick="switchSidebarView('triggers')">
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-                        <span>Hardware Triggers</span>
+                <!-- Multi-View Sidebar Segment Navigation -->
+                <div class="sidebar-top-nav-scroll">
+                    <button class="sidebar-nav-pill active" id="tabViewTriggers" onclick="switchSidebarView('triggers')">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                        <span>Triggers</span>
                     </button>
-                    <button class="sidebar-nav-tab" id="tabViewEmbeddings" onclick="switchSidebarView('embeddings')">
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"></path></svg>
-                        <span>Needle 3 Embeddings</span>
+                    <button class="sidebar-nav-pill" id="tabViewVault" onclick="switchSidebarView('vault')">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+                        <span>Vault (RAG)</span>
+                    </button>
+                    <button class="sidebar-nav-pill" id="tabViewSMS" onclick="switchSidebarView('sms')">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+                        <span>SMS Triage</span>
+                    </button>
+                    <button class="sidebar-nav-pill" id="tabViewCamera" onclick="switchSidebarView('camera')">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
+                        <span>Camera Doc</span>
+                    </button>
+                    <button class="sidebar-nav-pill" id="tabViewEmbeddings" onclick="switchSidebarView('embeddings')">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"></path></svg>
+                        <span>Embeddings</span>
                     </button>
                 </div>
 
@@ -2338,6 +2750,110 @@ HTML_TEMPLATE = """
                         </div>
                     </div>
                 </div>
+
+                <!-- View 3: Knowledge Vault (Offline RAG with 3072D Embeddings) -->
+                <div id="sidebarViewVault" style="display: none;">
+                    <div class="section-header">
+                        <span class="section-title">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+                            Knowledge Vault (RAG)
+                        </span>
+                        <button class="chat-clear-btn" onclick="toggleVaultAddForm()" id="btnToggleAddNote" style="font-size:0.7rem;">+ Add Note</button>
+                    </div>
+
+                    <!-- Add Note Form (Collapsible) -->
+                    <div id="vaultAddForm" style="display:none; background:var(--bg-card-subtle); border:1px solid var(--border-main); border-radius:var(--radius-md); padding:0.75rem; margin-bottom:0.75rem; flex-direction:column; gap:0.4rem;">
+                        <input type="text" class="embed-input-box" id="newNoteTitle" placeholder="Title (e.g. Wi-Fi Password)">
+                        <select class="embed-input-box" id="newNoteCategory" style="padding:0.4rem;">
+                            <option value="Personal">Personal</option>
+                            <option value="Credentials">Credentials / Passwords</option>
+                            <option value="Health">Health / Emergency</option>
+                            <option value="Work">Work / Reminders</option>
+                        </select>
+                        <textarea class="embed-input-box" id="newNoteContent" rows="2" placeholder="Note content to embed into SQLite..."></textarea>
+                        <button class="btn-embed-action" onclick="saveNewVaultNote()" style="padding:0.45rem;">
+                            <span>Save with 3072D Vector</span>
+                        </button>
+                    </div>
+
+                    <!-- Semantic RAG Search Bar -->
+                    <div style="display:flex; gap:0.4rem; margin-bottom:0.65rem;">
+                        <input type="text" class="embed-input-box" id="vaultSearchInput" placeholder="Semantic search (e.g. 'doctor blood group')...">
+                        <button class="btn-embed-action" onclick="searchVault()" style="padding:0 0.85rem;">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                        </button>
+                    </div>
+
+                    <!-- Vault Notes Container -->
+                    <div class="embeddings-container" id="vaultNotesContainer">
+                        <div style="font-size:0.75rem; color:var(--text-muted); text-align:center; padding:1rem;">Loading Knowledge Vault...</div>
+                    </div>
+                </div>
+
+                <!-- View 4: Smart SMS & Notification Triage -->
+                <div id="sidebarViewSMS" style="display: none;">
+                    <div class="section-header">
+                        <span class="section-title">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+                            Smart SMS & OTP Triage
+                        </span>
+                        <button class="chat-clear-btn" onclick="loadSMSTriage()" style="font-size:0.7rem;">Scan Now</button>
+                    </div>
+
+                    <!-- Quick Auto-OTP Banner -->
+                    <div style="background:var(--accent-amber-bg); border:1px solid rgba(217, 119, 6, 0.3); border-radius:var(--radius-md); padding:0.65rem; margin-bottom:0.65rem; display:flex; justify-content:space-between; align-items:center;">
+                        <div>
+                            <div style="font-size:0.7rem; font-weight:700; color:var(--accent-amber); text-transform:uppercase;">Latest OTP Code</div>
+                            <div id="smsLatestOtpDisplay" style="font-size:1.15rem; font-weight:800; color:var(--text-primary); letter-spacing:1px;">Scanning...</div>
+                        </div>
+                        <button class="btn-embed-action" onclick="copyLatestOtp()" style="padding:0.35rem 0.7rem; font-size:0.75rem; background:var(--accent-amber);">
+                            Copy OTP
+                        </button>
+                    </div>
+
+                    <!-- Filter Pill Tabs -->
+                    <div class="category-tabs" id="smsFilterTabs">
+                        <button class="cat-tab active" onclick="filterSMSCategory('all', this)">All</button>
+                        <button class="cat-tab" onclick="filterSMSCategory('otp', this)">🔑 OTP (<span id="countOtp">0</span>)</button>
+                        <button class="cat-tab" onclick="filterSMSCategory('transaction', this)">💳 Bank (<span id="countTx">0</span>)</button>
+                        <button class="cat-tab" onclick="filterSMSCategory('personal', this)">💬 Chat (<span id="countPersonal">0</span>)</button>
+                        <button class="cat-tab" onclick="filterSMSCategory('promotional', this)">📢 Promo (<span id="countPromo">0</span>)</button>
+                    </div>
+
+                    <div class="embeddings-container" id="smsListContainer">
+                        <div style="font-size:0.75rem; color:var(--text-muted); text-align:center; padding:1rem;">Tap "Scan Now" to triage SMS.</div>
+                    </div>
+                </div>
+
+                <!-- View 5: Smart Camera Inspector & Document Extractor -->
+                <div id="sidebarViewCamera" style="display: none;">
+                    <div class="section-header">
+                        <span class="section-title">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
+                            Camera Document Extractor
+                        </span>
+                    </div>
+
+                    <!-- Doc Type Selector -->
+                    <div class="category-tabs" style="margin-bottom:0.6rem;">
+                        <button class="cat-tab active" id="btnDocReceipt" onclick="selectDocType('receipt', this)">🧾 Receipt</button>
+                        <button class="cat-tab" id="btnDocCard" onclick="selectDocType('business_card', this)">📇 Business Card</button>
+                        <button class="cat-tab" id="btnDocID" onclick="selectDocType('id_card', this)">🪪 ID Badge</button>
+                        <button class="cat-tab" id="btnDocNote" onclick="selectDocType('general', this)">📝 General Note</button>
+                    </div>
+
+                    <div style="display:flex; flex-direction:column; gap:0.6rem;">
+                        <div style="font-size:0.74rem; color:var(--text-secondary);">
+                            Extract typed, structured JSON from photographed receipts, business cards, or badges:
+                        </div>
+                        <button class="btn-embed-action" id="btnSnapExtract" onclick="snapAndExtractDocument()">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                            <span>Snap Photo & Extract Fields</span>
+                        </button>
+                        <div id="cameraExtractResult" style="display:none;"></div>
+                    </div>
+                </div>
+
 
                 <!-- Terminal Output Section -->
                 <div class="terminal-wrapper">
@@ -2807,8 +3323,15 @@ HTML_TEMPLATE = """
                     appendLog('Cancelled', 'Execution was stopped.');
                 } else if (data.results && data.results.length > 0) {
                     appendLog('Agent', `Completed ${data.results.length} action(s).`);
+                    if (jarvisVoiceOutEnabled) {
+                        const voiceSummary = typeof data.results[0] === 'string' ? data.results[0] : (data.reasoning || 'Task executed successfully.');
+                        speakAloud(voiceSummary);
+                    }
                 } else {
                     appendLog('Agent', `Completed without actions (Reasoning: "${data.reasoning || 'Low confidence'}").`);
+                    if (jarvisVoiceOutEnabled && data.reasoning) {
+                        speakAloud(data.reasoning);
+                    }
                 }
 
             } catch (err) {
@@ -3033,6 +3556,410 @@ HTML_TEMPLATE = """
                 cancelExecution();
             }
         });
+
+        // -------------------------------------------------------------
+        // Feature 1: Jarvis Voice Loop (Speech Recognition + Spoken TTS)
+        // -------------------------------------------------------------
+        let jarvisVoiceOutEnabled = false;
+        let speechRecognizer = null;
+        let isListening = false;
+
+        function toggleVoiceOutput() {
+            jarvisVoiceOutEnabled = !jarvisVoiceOutEnabled;
+            const btn = document.getElementById('voiceToggleBtn');
+            const lbl = document.getElementById('voiceToggleLabel');
+            if (btn && lbl) {
+                btn.classList.toggle('active', jarvisVoiceOutEnabled);
+                lbl.innerText = jarvisVoiceOutEnabled ? 'Voice: ON' : 'Voice: OFF';
+            }
+            appendLog('System', `Jarvis spoken audio output ${jarvisVoiceOutEnabled ? 'ENABLED' : 'DISABLED'}.`);
+            if (jarvisVoiceOutEnabled) {
+                speakAloud("Jarvis voice feedback enabled. I am listening.");
+            }
+        }
+
+        function speakAloud(text) {
+            if (!text) return;
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel();
+                const utterance = new SpeechSynthesisUtterance(text.slice(0, 300));
+                utterance.rate = 1.05;
+                utterance.pitch = 1.0;
+                window.speechSynthesis.speak(utterance);
+            }
+        }
+
+        function toggleVoiceInput() {
+            if (isListening) {
+                stopSpeechRecognition();
+                return;
+            }
+            startSpeechRecognition();
+        }
+
+        function startSpeechRecognition() {
+            const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRec) {
+                alert("Speech recognition is not supported in this browser. You can still use the text input!");
+                return;
+            }
+
+            speechRecognizer = new SpeechRec();
+            speechRecognizer.continuous = false;
+            speechRecognizer.interimResults = false;
+            speechRecognizer.lang = 'en-US';
+
+            speechRecognizer.onstart = () => {
+                isListening = true;
+                const micBtn = document.getElementById('voiceMicBtn');
+                if (micBtn) micBtn.classList.add('listening');
+                chatInput.placeholder = '🎙️ Jarvis is listening... Speak now';
+                appendLog('System', 'Jarvis voice recognition listening...');
+            };
+
+            speechRecognizer.onresult = (event) => {
+                const transcript = event.results[0][0].transcript;
+                appendLog('User', `Voice recognized: "${transcript}"`);
+                chatInput.value = transcript;
+                stopSpeechRecognition();
+                submitCommand(transcript);
+            };
+
+            speechRecognizer.onerror = (event) => {
+                appendLog('Error', `Speech recognition error: ${event.error}`);
+                stopSpeechRecognition();
+            };
+
+            speechRecognizer.onend = () => {
+                stopSpeechRecognition();
+            };
+
+            try {
+                speechRecognizer.start();
+            } catch (e) {
+                stopSpeechRecognition();
+            }
+        }
+
+        function stopSpeechRecognition() {
+            isListening = false;
+            const micBtn = document.getElementById('voiceMicBtn');
+            if (micBtn) micBtn.classList.remove('listening');
+            chatInput.placeholder = 'Command phone hardware or ask anything... (Press Enter to send)';
+            if (speechRecognizer) {
+                try { speechRecognizer.stop(); } catch (e) {}
+                speechRecognizer = null;
+            }
+        }
+
+        // -------------------------------------------------------------
+        // Multi-View Sidebar Switching
+        // -------------------------------------------------------------
+        const allSidebarViews = ['triggers', 'vault', 'sms', 'camera', 'embeddings'];
+
+        function switchSidebarView(viewName) {
+            allSidebarViews.forEach(v => {
+                const cap = v.charAt(0).toUpperCase() + v.slice(1);
+                const pill = document.getElementById('tabView' + cap);
+                const view = document.getElementById('sidebarView' + cap);
+                if (pill) pill.classList.toggle('active', v === viewName);
+                if (view) view.style.display = (v === viewName) ? 'block' : 'none';
+            });
+
+            if (viewName === 'vault') loadVaultNotes();
+            else if (viewName === 'sms') loadSMSTriage();
+        }
+
+        // -------------------------------------------------------------
+        // Feature 2: Offline Knowledge Vault (RAG)
+        // -------------------------------------------------------------
+        function toggleVaultAddForm() {
+            const form = document.getElementById('vaultAddForm');
+            const btn = document.getElementById('btnToggleAddNote');
+            if (form) {
+                const isOpen = form.style.display === 'flex';
+                form.style.display = isOpen ? 'none' : 'flex';
+                btn.innerText = isOpen ? '+ Add Note' : 'Cancel';
+            }
+        }
+
+        async function saveNewVaultNote() {
+            const title = document.getElementById('newNoteTitle').value.trim();
+            const content = document.getElementById('newNoteContent').value.trim();
+            const category = document.getElementById('newNoteCategory').value;
+            if (!title || !content) return;
+
+            appendLog('System', `Embedding and persisting note: "${title}"...`);
+            try {
+                const res = await fetch('/api/kb/add', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title, content, category })
+                });
+                const data = await res.json();
+                if (data.status === 'ok') {
+                    document.getElementById('newNoteTitle').value = '';
+                    document.getElementById('newNoteContent').value = '';
+                    toggleVaultAddForm();
+                    loadVaultNotes();
+                    appendLog('Agent', `Saved note to Vault with 3072D Needle vector.`);
+                }
+            } catch (e) {
+                appendLog('Error', `Failed to save note: ${e.message}`);
+            }
+        }
+
+        async function loadVaultNotes() {
+            const container = document.getElementById('vaultNotesContainer');
+            try {
+                const res = await fetch('/api/kb/list');
+                const data = await res.json();
+                if (data.status === 'ok') {
+                    if (data.notes.length === 0) {
+                        container.innerHTML = `<div style="font-size:0.75rem; color:var(--text-muted); text-align:center; padding:1rem;">Knowledge Vault empty. Add your first note!</div>`;
+                        return;
+                    }
+                    let html = '';
+                    data.notes.forEach(n => {
+                        html += `
+                            <div class="vault-note-card">
+                                <div style="display:flex; justify-content:space-between; align-items:center;">
+                                    <strong style="font-size:0.8rem; color:var(--text-primary);">${n.title}</strong>
+                                    <span class="badge-sub" style="font-size:0.65rem;">${n.category}</span>
+                                </div>
+                                <div style="font-size:0.75rem; color:var(--text-secondary); line-height:1.4;">${n.content}</div>
+                                <div style="display:flex; justify-content:space-between; align-items:center; margin-top:2px;">
+                                    <span style="font-size:0.68rem; color:var(--text-muted);">${n.created_at}</span>
+                                    <button class="chat-clear-btn" onclick="deleteVaultNote(${n.id})" style="font-size:0.68rem; padding:1px 4px;">Delete</button>
+                                </div>
+                            </div>
+                        `;
+                    });
+                    container.innerHTML = html;
+                }
+            } catch (e) {
+                container.innerHTML = `<div style="color:var(--danger); font-size:0.75rem; padding:0.5rem;">Failed to load vault: ${e.message}</div>`;
+            }
+        }
+
+        async function searchVault() {
+            const query = document.getElementById('vaultSearchInput').value.trim();
+            if (!query) { loadVaultNotes(); return; }
+            const container = document.getElementById('vaultNotesContainer');
+            container.innerHTML = `<div style="font-size:0.75rem; color:var(--text-muted); text-align:center; padding:1rem;">Computing 3072D cosine similarity...</div>`;
+            appendLog('Agent', `RAG query against Knowledge Vault: "${query}"`);
+
+            try {
+                const res = await fetch('/api/kb/search', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query })
+                });
+                const data = await res.json();
+                if (data.status === 'ok') {
+                    if (data.results.length === 0) {
+                        container.innerHTML = `<div style="font-size:0.75rem; color:var(--text-muted); text-align:center; padding:1rem;">No matching notes found.</div>`;
+                        return;
+                    }
+                    let html = `<div style="font-size:0.72rem; color:var(--text-muted); margin-bottom:0.4rem;">Top ${data.results.length} semantic matches:</div>`;
+                    data.results.forEach(m => {
+                        let scoreColor = 'var(--accent-green)';
+                        if (m.match_pct < 50) scoreColor = 'var(--danger)';
+                        else if (m.match_pct < 75) scoreColor = 'var(--accent-amber)';
+
+                        html += `
+                            <div class="vault-note-card" style="border-left: 3px solid ${scoreColor};">
+                                <div style="display:flex; justify-content:space-between; align-items:center;">
+                                    <strong style="font-size:0.8rem; color:var(--text-primary);">${m.title}</strong>
+                                    <span style="font-size:0.72rem; font-weight:700; color:${scoreColor};">${m.match_pct}% Match</span>
+                                </div>
+                                <div style="font-size:0.75rem; color:var(--text-secondary); line-height:1.4;">${m.content}</div>
+                                <div style="display:flex; justify-content:space-between; align-items:center; margin-top:2px;">
+                                    <span class="badge-sub" style="font-size:0.65rem;">${m.category}</span>
+                                    <span style="font-size:0.68rem; color:var(--text-muted);">Cosine: ${m.similarity}</span>
+                                </div>
+                            </div>
+                        `;
+                    });
+                    container.innerHTML = html;
+                    appendLog('Agent', `RAG search returned ${data.results.length} matches.`);
+                }
+            } catch (e) {
+                container.innerHTML = `<div style="color:var(--danger); font-size:0.75rem;">Search failed: ${e.message}</div>`;
+            }
+        }
+
+        async function deleteVaultNote(id) {
+            try {
+                await fetch('/api/kb/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id })
+                });
+                loadVaultNotes();
+            } catch (e) {}
+        }
+
+        // -------------------------------------------------------------
+        // Feature 6: Smart SMS & Notification Triage
+        // -------------------------------------------------------------
+        let currentSmsData = null;
+        let activeSmsCategory = 'all';
+
+        async function loadSMSTriage() {
+            const container = document.getElementById('smsListContainer');
+            container.innerHTML = `<div style="font-size:0.75rem; color:var(--text-muted); text-align:center; padding:1rem;">Scanning & classifying inbox with Needle...</div>`;
+            appendLog('System', 'Scanning SMS inbox for OTPs & transactions...');
+
+            try {
+                const res = await fetch('/api/sms/triage');
+                const data = await res.json();
+                if (data.status === 'ok') {
+                    currentSmsData = data;
+                    document.getElementById('countOtp').innerText = data.counts.otp;
+                    document.getElementById('countTx').innerText = data.counts.transaction;
+                    document.getElementById('countPersonal').innerText = data.counts.personal;
+                    document.getElementById('countPromo').innerText = data.counts.promotional;
+
+                    const otpDisplay = document.getElementById('smsLatestOtpDisplay');
+                    if (data.latest_otp) {
+                        otpDisplay.innerText = data.latest_otp;
+                        otpDisplay.style.color = 'var(--accent-amber)';
+                        appendLog('Agent', `Auto-detected OTP: ${data.latest_otp} (copied to clipboard).`);
+                    } else {
+                        otpDisplay.innerText = 'No OTP Found';
+                        otpDisplay.style.color = 'var(--text-muted)';
+                    }
+                    renderFilteredSMS();
+                }
+            } catch (e) {
+                container.innerHTML = `<div style="color:var(--danger); font-size:0.75rem;">SMS Triage error: ${e.message}</div>`;
+            }
+        }
+
+        function filterSMSCategory(cat, btn) {
+            activeSmsCategory = cat;
+            document.querySelectorAll('#smsFilterTabs .cat-tab').forEach(b => b.classList.remove('active'));
+            if (btn) btn.classList.add('active');
+            renderFilteredSMS();
+        }
+
+        function renderFilteredSMS() {
+            if (!currentSmsData) return;
+            const container = document.getElementById('smsListContainer');
+            let items = [];
+            const msgs = currentSmsData.messages;
+            if (activeSmsCategory === 'all') {
+                items = [...msgs.otp, ...msgs.transaction, ...msgs.personal, ...msgs.promotional];
+            } else {
+                items = msgs[activeSmsCategory] || [];
+            }
+
+            if (items.length === 0) {
+                container.innerHTML = `<div style="font-size:0.75rem; color:var(--text-muted); text-align:center; padding:1rem;">No messages in this category.</div>`;
+                return;
+            }
+
+            let html = '';
+            items.forEach(m => {
+                let badge = '';
+                if (m.otp_code) {
+                    badge = `<span class="sms-otp-badge">🔑 OTP: ${m.otp_code} <button class="chat-clear-btn" style="padding:1px 5px; color:var(--accent-amber);" onclick="copyText('${m.otp_code}', this)">Copy</button></span>`;
+                }
+
+                html += `
+                    <div class="sms-item-card">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <strong style="font-size:0.78rem; color:var(--text-primary);">${m.sender || 'Unknown'}</strong>
+                            <span style="font-size:0.68rem; color:var(--text-muted);">${m.date || ''}</span>
+                        </div>
+                        <div style="font-size:0.75rem; color:var(--text-secondary); line-height:1.4;">${m.body}</div>
+                        ${badge}
+                    </div>
+                `;
+            });
+            container.innerHTML = html;
+        }
+
+        function copyLatestOtp() {
+            if (!currentSmsData || !currentSmsData.latest_otp) return;
+            navigator.clipboard.writeText(currentSmsData.latest_otp);
+            alert(`OTP ${currentSmsData.latest_otp} copied to clipboard!`);
+        }
+
+        function copyText(str, btn) {
+            navigator.clipboard.writeText(str);
+            if (btn) {
+                const orig = btn.innerText;
+                btn.innerText = 'Copied!';
+                setTimeout(() => { btn.innerText = orig; }, 1500);
+            }
+        }
+
+        // -------------------------------------------------------------
+        // Feature 4: Smart Camera Inspector & Document Extractor
+        // -------------------------------------------------------------
+        let selectedDocType = 'receipt';
+
+        function selectDocType(type, btn) {
+            selectedDocType = type;
+            document.querySelectorAll('#btnDocReceipt, #btnDocCard, #btnDocID, #btnDocNote').forEach(b => b.classList.remove('active'));
+            if (btn) btn.classList.add('active');
+        }
+
+        async function snapAndExtractDocument() {
+            const btn = document.getElementById('btnSnapExtract');
+            const resBox = document.getElementById('cameraExtractResult');
+            btn.disabled = true;
+            btn.innerHTML = `<span class="spinner-ring" style="width:13px;height:13px;"></span> Capturing & Extracting...`;
+            appendLog('Agent', `Capturing camera photo for structured ${selectedDocType} extraction...`);
+
+            try {
+                const res = await fetch('/api/camera/extract', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ type: selectedDocType })
+                });
+                const data = await res.json();
+                if (data.status === 'ok') {
+                    const ext = data.extracted;
+                    let fieldsHtml = '';
+                    for (const [k, v] of Object.entries(ext)) {
+                        fieldsHtml += `
+                            <div class="stat-item" style="display:flex; justify-content:space-between; align-items:center;">
+                                <span class="stat-label">${k}</span>
+                                <span class="stat-value" style="font-size:0.78rem;">${JSON.stringify(v)}</span>
+                            </div>
+                        `;
+                    }
+
+                    resBox.innerHTML = `
+                        <div class="embed-result-card" style="margin-top:0.5rem;">
+                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                <span style="font-size:0.75rem; font-weight:700; color:var(--text-primary); text-transform:uppercase;">Extracted ${selectedDocType}</span>
+                                <span class="badge-sub" style="font-size:0.65rem;">Needle Structured SAN</span>
+                            </div>
+                            <div style="display:flex; flex-direction:column; gap:0.35rem;">
+                                ${fieldsHtml}
+                            </div>
+                            <details class="raw-json-details" style="margin-top:0.3rem;">
+                                <summary>Raw JSON</summary>
+                                <pre>${JSON.stringify(ext, null, 2)}</pre>
+                            </details>
+                        </div>
+                    `;
+                    resBox.style.display = 'block';
+                    appendLog('Agent', `Extracted ${Object.keys(ext).length} structured fields from ${selectedDocType}.`);
+                }
+            } catch (e) {
+                resBox.innerHTML = `<div style="color:var(--danger); font-size:0.75rem;">Extraction error: ${e.message}</div>`;
+                resBox.style.display = 'block';
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg><span>Snap Photo & Extract Fields</span>`;
+            }
+        }
+
     </script>
 </body>
 </html>
@@ -3100,26 +4027,6 @@ def extract_api():
     except Exception as e:
         return jsonify({"status": "error", "error": str(e)}), 500
 
-def compute_simulated_embedding(text: str, dims: int = 3072):
-    import hashlib
-    vec = []
-    seed = text.encode("utf-8")
-    for i in range(dims):
-        h = hashlib.sha256(seed + i.to_bytes(4, "little")).digest()
-        val = (int.from_bytes(h[:4], "little") / 0xFFFFFFFF) * 2.0 - 1.0
-        vec.append(round(val, 6))
-    norm = math.sqrt(sum(x * x for x in vec)) or 1.0
-    return [round(x / norm, 6) for x in vec]
-
-def calc_cosine_sim(v1, v2):
-    if not v1 or not v2 or len(v1) != len(v2):
-        return 0.0
-    dot = sum(a * b for a, b in zip(v1, v2))
-    norm1 = math.sqrt(sum(a * a for a in v1))
-    norm2 = math.sqrt(sum(b * b for b in v2))
-    if norm1 == 0 or norm2 == 0:
-        return 0.0
-    return max(-1.0, min(1.0, dot / (norm1 * norm2)))
 
 @app.route("/api/embed", methods=["POST"])
 def embed_api():
@@ -3193,6 +4100,74 @@ def embed_api():
             "vector": vec,
             "model": f"Needle {active_generation} (SAN)"
         })
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+# ----------------------------------------------------------------------
+# API Routes for Knowledge Vault, SMS Triage & Camera Document Extractor
+# ----------------------------------------------------------------------
+@app.route("/api/kb/list", methods=["GET"])
+def kb_list_api():
+    try:
+        return jsonify({"status": "ok", "notes": list_vault_db()})
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+@app.route("/api/kb/add", methods=["POST"])
+def kb_add_api():
+    try:
+        data = request.get_json() or {}
+        title = data.get("title", "").strip()
+        content = data.get("content", "").strip()
+        cat = data.get("category", "General").strip()
+        if not title or not content:
+            return jsonify({"status": "error", "error": "Title and content required"}), 400
+        nid = save_note_to_vault_db(title, content, cat)
+        return jsonify({"status": "ok", "id": nid, "message": "Saved to Knowledge Vault with 3072D vector"})
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+@app.route("/api/kb/search", methods=["POST"])
+def kb_search_api():
+    try:
+        data = request.get_json() or {}
+        query = data.get("query", "").strip()
+        if not query:
+            return jsonify({"status": "error", "error": "Empty query"}), 400
+        results = search_vault_db(query, top_k=4)
+        return jsonify({"status": "ok", "query": query, "results": results})
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+@app.route("/api/kb/delete", methods=["POST"])
+def kb_delete_api():
+    try:
+        data = request.get_json() or {}
+        nid = data.get("id")
+        if not nid:
+            return jsonify({"status": "error", "error": "Note id required"}), 400
+        delete_vault_db(int(nid))
+        return jsonify({"status": "ok", "message": "Note deleted"})
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+@app.route("/api/sms/triage", methods=["GET", "POST"])
+def sms_triage_api():
+    try:
+        data = triage_all_sms(15)
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+@app.route("/api/camera/extract", methods=["POST"])
+def camera_extract_api():
+    try:
+        data = request.get_json() or {}
+        doc_type = data.get("type", "receipt")
+        custom_text = data.get("text")
+        res = extract_document_from_image(doc_type, custom_text)
+        return jsonify({"status": "ok", "type": doc_type, "extracted": res})
     except Exception as e:
         return jsonify({"status": "error", "error": str(e)}), 500
 

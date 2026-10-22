@@ -8,3 +8,4 @@ venv/
 ENV/
 .idea/
 .vscode/
+*.db
