@@ -42,7 +42,7 @@ Make sure you have the [Termux:API app](https://f-droid.org/en/packages/com.term
 ### 2. Install Dependencies
 ```bash
 apt update && apt upgrade -y
-apt install git python3 python3-pip python3-venv -y
+apt install git python3 python3-pip python3-venv ca-certificates -y
 ```
 
 Clone this repository and install the dependencies:
@@ -53,6 +53,8 @@ python3 -m venv myenv
 source myenv/bin/activate
 pip3 install -r requirements.txt
 ```
+
+> **Note on PRoot Ubuntu:** `app.py` and `termux_needle.py` automatically sanitize inherited Termux environment variables (`ANDROID_ROOT` and `ANDROID_DATA`) at runtime so that `needle` correctly detects the Ubuntu ARM64 (`manylinux2014_aarch64`) environment and loads the engine seamlessly.
 
 ---
 

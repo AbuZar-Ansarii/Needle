@@ -5,6 +5,15 @@ import faulthandler
 
 faulthandler.enable()
 
+# Clean up inherited Android environment variables in PRoot Linux (Termux)
+# In proot-distro Ubuntu, ANDROID_ROOT and ANDROID_DATA are inherited from Android's environment.
+# This causes the needle library's platform detection to falsely assume the host is Android Bionic
+# rather than glibc Linux, resulting in a RuntimeError. Removing them allows needle to correctly
+# identify the environment as manylinux aarch64 and load the glibc-compatible shared library.
+if sys.platform.startswith("linux"):
+    os.environ.pop("ANDROID_ROOT", None)
+    os.environ.pop("ANDROID_DATA", None)
+
 # Automatically prepend Termux binaries path to system environment PATH
 TERMUX_BIN_PATH = "/data/data/com.termux/files/usr/bin"
 if os.path.exists(TERMUX_BIN_PATH) and TERMUX_BIN_PATH not in os.environ.get("PATH", ""):
