@@ -43,22 +43,51 @@ app = Flask(__name__)
 
 IS_TERMUX = os.path.exists("/data/data/com.termux")
 
+active_requests = {}
+active_requests_lock = threading.Lock()
+_current_req_id = threading.local()
+
+def is_current_request_cancelled():
+    req_id = getattr(_current_req_id, "id", None)
+    if not req_id:
+        return False
+    with active_requests_lock:
+        return active_requests.get(req_id, {}).get("cancelled", False)
+
 def run_cmd(args):
+    if is_current_request_cancelled():
+        return "[Execution Cancelled by User]"
+    req_id = getattr(_current_req_id, "id", None)
     # Try running the actual termux command first with 15s timeout for hardware warm-up
     try:
-        res = subprocess.run(args, capture_output=True, text=True, timeout=15)
-        if res.returncode == 0:
-            return res.stdout.strip() if res.stdout.strip() else "Success"
+        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if req_id:
+            with active_requests_lock:
+                if req_id in active_requests:
+                    active_requests[req_id]["proc"] = proc
+        stdout, stderr = proc.communicate(timeout=15)
+        if is_current_request_cancelled():
+            return "[Execution Cancelled by User]"
+        if proc.returncode == 0:
+            return stdout.strip() if stdout.strip() else "Success"
         else:
             if IS_TERMUX:
-                err_msg = res.stderr.strip() or res.stdout.strip() or f"Exit code {res.returncode}"
+                err_msg = stderr.strip() or stdout.strip() or f"Exit code {proc.returncode}"
                 return f"Error ({args[0]}): {err_msg}"
             raise FileNotFoundError()
     except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        if is_current_request_cancelled():
+            return "[Execution Cancelled by User]"
         if IS_TERMUX:
             return f"Error ({args[0]}): Command timed out after 15 seconds. Termux API might be hanging or lack permissions."
         raise FileNotFoundError()
     except (FileNotFoundError, PermissionError, subprocess.SubprocessError):
+        if is_current_request_cancelled():
+            return "[Execution Cancelled by User]"
         if IS_TERMUX:
             return f"Error ({args[0]}): Command execution failed in Termux environment."
         # Simulation layer for desktop testing (only active on non-Termux systems)
@@ -880,26 +909,89 @@ agent = get_agent(active_generation)
 # ----------------------------------------------------------------------
 HTML_TEMPLATE = """
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Termux Agent Hub</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Termux Agent Hub — Needle AI</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg-dark: #090a0f;
-            --panel-bg: #11131e;
-            --border-subtle: rgba(255, 255, 255, 0.05);
+            --bg-canvas: #f8fafc;
+            --bg-card: #ffffff;
+            --bg-card-subtle: #f1f5f9;
+            --bg-input: #ffffff;
+            --border-main: #e2e8f0;
+            --border-focus: #6366f1;
+            --text-primary: #0f172a;
+            --text-secondary: #475569;
+            --text-muted: #94a3b8;
             --primary: #4f46e5;
-            --primary-light: #6366f1;
-            --primary-glow: rgba(79, 70, 229, 0.15);
+            --primary-hover: #4338ca;
+            --primary-light: #eef2ff;
+            --primary-glow: rgba(79, 70, 229, 0.12);
             --accent-cyan: #0891b2;
             --accent-green: #10b981;
-            --text-main: #f1f5f9;
+            --accent-green-bg: #ecfdf5;
+            --accent-purple: #7c3aed;
+            --accent-purple-bg: #f5f3ff;
+            --accent-amber: #d97706;
+            --accent-amber-bg: #fffbeb;
+            --danger: #ef4444;
+            --danger-hover: #dc2626;
+            --danger-bg: #fef2f2;
+            --bubble-user: #4f46e5;
+            --bubble-user-text: #ffffff;
+            --bubble-agent: #ffffff;
+            --bubble-agent-border: #e2e8f0;
+            --terminal-bg: #0f172a;
+            --terminal-text: #10b981;
+            --terminal-border: #1e293b;
+            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+            --shadow-md: 0 4px 12px -2px rgba(0, 0, 0, 0.06), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+            --shadow-lg: 0 12px 24px -4px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.03);
+            --radius-sm: 8px;
+            --radius-md: 12px;
+            --radius-lg: 16px;
+            --radius-full: 9999px;
+        }
+
+        [data-theme="dark"] {
+            --bg-canvas: #090a0f;
+            --bg-card: #11131e;
+            --bg-card-subtle: #161824;
+            --bg-input: #131522;
+            --border-main: rgba(255, 255, 255, 0.08);
+            --border-focus: #6366f1;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
             --text-muted: #64748b;
-            --chat-bubble-agent: #161824;
-            --chat-bubble-user: #4f46e5;
+            --primary: #6366f1;
+            --primary-hover: #4f46e5;
+            --primary-light: rgba(99, 102, 241, 0.15);
+            --primary-glow: rgba(99, 102, 241, 0.25);
+            --accent-cyan: #22d3ee;
+            --accent-green: #10b981;
+            --accent-green-bg: rgba(16, 185, 129, 0.12);
+            --accent-purple: #a855f7;
+            --accent-purple-bg: rgba(168, 85, 247, 0.12);
+            --accent-amber: #f59e0b;
+            --accent-amber-bg: rgba(245, 158, 11, 0.12);
+            --danger: #ef4444;
+            --danger-hover: #dc2626;
+            --danger-bg: rgba(239, 68, 68, 0.15);
+            --bubble-user: #4f46e5;
+            --bubble-user-text: #ffffff;
+            --bubble-agent: #161824;
+            --bubble-agent-border: rgba(255, 255, 255, 0.07);
+            --terminal-bg: #05060a;
+            --terminal-text: #10b981;
+            --terminal-border: rgba(255, 255, 255, 0.06);
+            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.4);
+            --shadow-md: 0 4px 12px -2px rgba(0, 0, 0, 0.5);
+            --shadow-lg: 0 12px 24px -4px rgba(0, 0, 0, 0.6);
         }
 
         * {
@@ -909,143 +1001,184 @@ HTML_TEMPLATE = """
         }
 
         body {
-            font-family: 'Inter', sans-serif;
-            background-color: var(--bg-dark);
-            color: var(--text-main);
+            font-family: 'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: var(--bg-canvas);
+            color: var(--text-primary);
             min-height: 100vh;
             display: flex;
             flex-direction: column;
             overflow-x: hidden;
+            transition: background-color 0.25s ease, color 0.25s ease;
+            -webkit-font-smoothing: antialiased;
         }
 
+        /* Top Navigation Header */
         header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 1.25rem 2rem;
-            border-bottom: 1px solid var(--border-subtle);
-            background: rgba(9, 10, 15, 0.85);
-            backdrop-filter: blur(12px);
+            padding: 0.9rem 1.75rem;
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border-main);
             position: sticky;
             top: 0;
-            z-index: 10;
+            z-index: 50;
+            backdrop-filter: blur(16px);
+            box-shadow: var(--shadow-sm);
         }
 
         .header-left {
             display: flex;
             align-items: center;
-            gap: 0.75rem;
+            gap: 0.85rem;
         }
 
         .logo-mark {
-            width: 1.8rem;
-            height: 1.8rem;
-            border-radius: 6px;
-            background: linear-gradient(135deg, var(--primary), var(--primary-light));
+            width: 2.2rem;
+            height: 2.2rem;
+            border-radius: 10px;
+            background: linear-gradient(135deg, #4f46e5, #06b6d4);
             display: flex;
             align-items: center;
             justify-content: center;
-            font-weight: 700;
-            font-size: 1rem;
-            color: #fff;
-            box-shadow: 0 0 10px var(--primary-glow);
+            font-weight: 800;
+            font-size: 1.05rem;
+            color: #ffffff;
+            box-shadow: 0 2px 10px var(--primary-glow);
+            letter-spacing: -0.5px;
         }
 
         .logo-text h1 {
-            font-size: 1.1rem;
-            font-weight: 600;
-            letter-spacing: -0.2px;
-            color: #ffffff;
+            font-size: 1.05rem;
+            font-weight: 700;
+            letter-spacing: -0.3px;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
         }
 
-        .logo-text span {
-            font-size: 0.7rem;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
+        .logo-text .badge-sub {
+            font-size: 0.68rem;
+            font-weight: 600;
+            color: var(--primary);
+            background: var(--primary-light);
+            padding: 0.15rem 0.5rem;
+            border-radius: var(--radius-full);
+            letter-spacing: 0.3px;
         }
 
         .header-right {
             display: flex;
             align-items: center;
-            gap: 0.85rem;
+            gap: 0.75rem;
         }
 
-        .model-selector-group {
+        /* Model Switcher Segment */
+        .model-switcher {
             display: flex;
             align-items: center;
-            gap: 0.35rem;
-            background: rgba(255, 255, 255, 0.03);
-            border: 1px solid var(--border-subtle);
-            padding: 0.25rem 0.35rem;
-            border-radius: 20px;
-        }
-
-        .model-label {
-            font-size: 0.75rem;
-            color: var(--text-muted);
-            margin-left: 0.4rem;
-            font-weight: 500;
+            background: var(--bg-card-subtle);
+            border: 1px solid var(--border-main);
+            padding: 3px;
+            border-radius: var(--radius-full);
+            gap: 2px;
         }
 
         .model-btn {
             background: transparent;
             border: none;
-            color: var(--text-muted);
-            padding: 0.25rem 0.65rem;
-            border-radius: 14px;
-            font-size: 0.75rem;
+            color: var(--text-secondary);
+            padding: 0.35rem 0.85rem;
+            border-radius: var(--radius-full);
+            font-size: 0.78rem;
             font-weight: 600;
             cursor: pointer;
-            transition: all 0.2s ease;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
         }
 
         .model-btn:hover {
-            color: var(--text-main);
-            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-primary);
         }
 
         .model-btn.active {
             background: var(--primary);
             color: #ffffff;
-            box-shadow: 0 0 10px var(--primary-glow);
+            box-shadow: 0 2px 8px var(--primary-glow);
         }
 
-        .status-container {
+        .model-btn .pill-badge {
+            font-size: 0.65rem;
+            padding: 1px 5px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.2);
+            font-weight: 700;
+        }
+
+        .model-btn:not(.active) .pill-badge {
+            background: var(--border-main);
+            color: var(--text-muted);
+        }
+
+        /* Status Badge */
+        .status-pill {
             display: flex;
             align-items: center;
-            gap: 0.5rem;
-            background: rgba(255, 255, 255, 0.02);
-            border: 1px solid var(--border-subtle);
-            padding: 0.4rem 0.8rem;
-            border-radius: 20px;
+            gap: 0.45rem;
+            background: var(--accent-green-bg);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            padding: 0.35rem 0.75rem;
+            border-radius: var(--radius-full);
             font-size: 0.75rem;
-            font-weight: 500;
+            font-weight: 600;
             color: var(--accent-green);
         }
 
         .status-dot {
-            width: 6px;
-            height: 6px;
+            width: 7px;
+            height: 7px;
             border-radius: 50%;
             background-color: var(--accent-green);
-            box-shadow: 0 0 8px var(--accent-green);
-            animation: pulse-dot 2s infinite;
+            box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.25);
+            animation: pulse-dot 2s infinite ease-in-out;
         }
 
         @keyframes pulse-dot {
-            0% { transform: scale(0.95); opacity: 0.6; }
-            50% { transform: scale(1.1); opacity: 1; }
-            100% { transform: scale(0.95); opacity: 0.6; }
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(0.85); opacity: 0.6; }
         }
 
+        /* Theme Toggle Button */
+        .theme-toggle-btn {
+            background: var(--bg-card-subtle);
+            border: 1px solid var(--border-main);
+            color: var(--text-secondary);
+            width: 2.1rem;
+            height: 2.1rem;
+            border-radius: var(--radius-full);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .theme-toggle-btn:hover {
+            background: var(--border-main);
+            color: var(--text-primary);
+        }
+
+        /* Main Grid */
         main {
             display: grid;
-            grid-template-columns: 1.3fr 0.7fr;
-            gap: 1.5rem;
-            padding: 1.5rem;
+            grid-template-columns: 1.35fr 0.65fr;
+            gap: 1.25rem;
+            padding: 1.25rem 1.75rem;
             flex-grow: 1;
-            max-width: 1400px;
+            max-width: 1440px;
             margin: 0 auto;
             width: 100%;
         }
@@ -1053,101 +1186,119 @@ HTML_TEMPLATE = """
         @media (max-width: 1024px) {
             main {
                 grid-template-columns: 1fr;
-            }
-        }
-
-        @media (max-width: 768px) {
-            main {
-                padding: 0.75rem;
-                gap: 1rem;
-            }
-            header {
                 padding: 1rem;
             }
-            .card {
-                height: 550px; /* Limit height of chat container on mobile so triggers are easily scrollable underneath */
-            }
-            .triggers-grid {
-                grid-template-columns: repeat(2, 1fr);
-            }
-            .terminal-container {
-                max-height: 200px;
-                min-height: 150px;
-            }
         }
 
-        @media (max-width: 480px) {
-            .triggers-grid {
-                grid-template-columns: 1fr; /* Single column on tiny phones for tap comfort */
-            }
-        }
-
-        .card {
-            background: var(--panel-bg);
-            border: 1px solid var(--border-subtle);
-            border-radius: 12px;
+        .panel-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-main);
+            border-radius: var(--radius-lg);
             display: flex;
             flex-direction: column;
             overflow: hidden;
-            height: calc(100vh - 120px);
+            box-shadow: var(--shadow-sm);
+            height: calc(100vh - 110px);
         }
 
-        /* Chat Panel Styles */
-        .chat-layout {
+        @media (max-width: 1024px) {
+            .panel-card {
+                height: 600px;
+            }
+            .sidebar-card {
+                height: auto;
+            }
+        }
+
+        /* Chat Layout */
+        .chat-container {
             display: flex;
             flex-direction: column;
             height: 100%;
+            background: var(--bg-card);
         }
 
         .chat-header {
-            padding: 1rem 1.5rem;
-            border-bottom: 1px solid var(--border-subtle);
+            padding: 0.85rem 1.25rem;
+            border-bottom: 1px solid var(--border-main);
             display: flex;
             align-items: center;
             justify-content: space-between;
+            background: var(--bg-card);
+        }
+
+        .chat-header-info {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
         }
 
         .chat-header-title {
-            font-size: 0.9rem;
-            font-weight: 600;
-            color: #ffffff;
+            font-size: 0.92rem;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .chat-header-model {
+            font-size: 0.72rem;
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+
+        .chat-clear-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            font-size: 0.75rem;
+            font-weight: 500;
+            cursor: pointer;
+            padding: 0.25rem 0.5rem;
+            border-radius: var(--radius-sm);
+            transition: all 0.15s ease;
+        }
+
+        .chat-clear-btn:hover {
+            color: var(--danger);
+            background: var(--danger-bg);
         }
 
         .chat-messages {
             flex-grow: 1;
-            padding: 1.5rem;
+            padding: 1.25rem;
             overflow-y: auto;
             display: flex;
             flex-direction: column;
-            gap: 1.25rem;
+            gap: 1.1rem;
+            scroll-behavior: smooth;
         }
 
         /* Custom Scrollbars */
         ::-webkit-scrollbar {
-            width: 5px;
-            height: 5px;
+            width: 6px;
+            height: 6px;
         }
         ::-webkit-scrollbar-track {
             background: transparent;
         }
         ::-webkit-scrollbar-thumb {
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 3px;
+            background: var(--border-main);
+            border-radius: var(--radius-full);
         }
         ::-webkit-scrollbar-thumb:hover {
-            background: rgba(255, 255, 255, 0.12);
+            background: var(--text-muted);
         }
 
+        /* Message Bubbles */
         .message {
-            max-width: 85%;
+            max-width: 88%;
             display: flex;
             flex-direction: column;
             gap: 0.3rem;
-            animation: fadeIn 0.25s ease-out;
+            animation: fadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
         }
 
         @keyframes fadeIn {
-            from { transform: translateY(8px); opacity: 0; }
+            from { transform: translateY(6px); opacity: 0; }
             to { transform: translateY(0); opacity: 1; }
         }
 
@@ -1158,75 +1309,232 @@ HTML_TEMPLATE = """
         .message.agent {
             align-self: flex-start;
             width: 100%;
-        }
-
-        .bubble {
-            padding: 0.85rem 1.1rem;
-            border-radius: 10px;
-            font-size: 0.92rem;
-            line-height: 1.45;
+            max-width: 95%;
         }
 
         .message.user .bubble {
-            background-color: var(--chat-bubble-user);
-            color: #ffffff;
-            border-bottom-right-radius: 2px;
+            background: linear-gradient(135deg, var(--bubble-user), #4338ca);
+            color: var(--bubble-user-text);
+            border-radius: 18px 18px 4px 18px;
+            padding: 0.75rem 1.15rem;
+            font-size: 0.92rem;
+            line-height: 1.5;
+            box-shadow: 0 2px 8px var(--primary-glow);
         }
 
         .message.agent .bubble {
-            background-color: var(--chat-bubble-agent);
-            border: 1px solid var(--border-subtle);
-            color: var(--text-main);
-            border-bottom-left-radius: 2px;
+            background: var(--bubble-agent);
+            border: 1px solid var(--bubble-agent-border);
+            color: var(--text-primary);
+            border-radius: 18px 18px 18px 4px;
+            padding: 1rem 1.25rem;
+            font-size: 0.92rem;
+            line-height: 1.5;
+            box-shadow: var(--shadow-sm);
             width: 100%;
         }
 
-        .meta-info {
+        .message-meta {
             font-size: 0.72rem;
             color: var(--text-muted);
             margin: 0 4px;
-        }
-
-        .message.user .meta-info {
-            text-align: right;
-        }
-
-        /* Agent reasoning details style */
-        .reasoning-box {
-            margin-top: 0.65rem;
-            background: rgba(0, 0, 0, 0.15);
-            border-radius: 6px;
-            border-left: 2px solid var(--primary);
-            padding: 0.5rem 0.75rem;
-            font-size: 0.8rem;
-            color: #94a3b8;
-        }
-
-        .reasoning-title {
-            font-weight: 600;
-            color: #a5b4fc;
-            margin-bottom: 0.2rem;
-            font-size: 0.7rem;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
             display: flex;
             align-items: center;
             gap: 0.35rem;
         }
 
-        .confidence-indicator {
+        .message.user .message-meta {
+            justify-content: flex-end;
+        }
+
+        /* Welcome Prompt Cards */
+        .welcome-card {
+            background: var(--bg-card-subtle);
+            border: 1px solid var(--border-main);
+            border-radius: var(--radius-md);
+            padding: 1.25rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .welcome-card h3 {
+            font-size: 1rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 0.35rem;
             display: flex;
             align-items: center;
+            gap: 0.4rem;
+        }
+
+        .welcome-card p {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            line-height: 1.5;
+            margin-bottom: 0.85rem;
+        }
+
+        .suggestion-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.4rem;
+        }
+
+        .chip {
+            background: var(--bg-card);
+            border: 1px solid var(--border-main);
+            color: var(--text-secondary);
+            font-size: 0.76rem;
+            font-weight: 500;
+            padding: 0.35rem 0.65rem;
+            border-radius: var(--radius-full);
+            cursor: pointer;
+            transition: all 0.15s ease;
+            display: flex;
+            align-items: center;
+            gap: 0.3rem;
+        }
+
+        .chip:hover {
+            border-color: var(--primary);
+            color: var(--primary);
+            background: var(--primary-light);
+            transform: translateY(-1px);
+        }
+
+        /* Tool Result Cards */
+        .tool-results-container {
+            display: flex;
+            flex-direction: column;
+            gap: 0.6rem;
+            margin-bottom: 0.65rem;
+        }
+
+        .tool-card {
+            background: var(--bg-card-subtle);
+            border: 1px solid var(--border-main);
+            border-radius: var(--radius-md);
+            padding: 0.75rem 0.95rem;
+            font-size: 0.86rem;
+        }
+
+        .tool-card-header {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 0.35rem;
+            font-size: 0.82rem;
+        }
+
+        .tool-card-body {
+            color: var(--text-secondary);
+            line-height: 1.45;
+        }
+
+        .tool-stat-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
             gap: 0.5rem;
-            font-size: 0.72rem;
-            margin-top: 0.5rem;
+            margin-top: 0.4rem;
+        }
+
+        .stat-item {
+            background: var(--bg-card);
+            border: 1px solid var(--border-main);
+            border-radius: var(--radius-sm);
+            padding: 0.4rem 0.6rem;
+        }
+
+        .stat-label {
+            font-size: 0.68rem;
             color: var(--text-muted);
+            text-transform: uppercase;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+        }
+
+        .stat-value {
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-top: 2px;
+        }
+
+        /* Accordion for Raw Output */
+        details.raw-json-details {
+            margin-top: 0.5rem;
+            border-top: 1px solid var(--border-main);
+            padding-top: 0.4rem;
+        }
+
+        details.raw-json-details summary {
+            font-size: 0.74rem;
+            color: var(--text-muted);
+            cursor: pointer;
+            user-select: none;
+            font-weight: 500;
+        }
+
+        details.raw-json-details summary:hover {
+            color: var(--primary);
+        }
+
+        details.raw-json-details pre {
+            margin-top: 0.4rem;
+            background: var(--bg-canvas);
+            border: 1px solid var(--border-main);
+            border-radius: var(--radius-sm);
+            padding: 0.6rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.74rem;
+            color: var(--text-primary);
+            overflow-x: auto;
+            max-height: 160px;
+        }
+
+        /* Reasoning Block */
+        .reasoning-box {
+            margin-top: 0.65rem;
+            background: var(--accent-purple-bg);
+            border-left: 3px solid var(--accent-purple);
+            border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+            padding: 0.6rem 0.85rem;
+            font-size: 0.82rem;
+            color: var(--text-secondary);
+        }
+
+        .reasoning-header {
+            font-weight: 700;
+            color: var(--accent-purple);
+            margin-bottom: 0.25rem;
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            display: flex;
+            align-items: center;
+            gap: 0.3rem;
+        }
+
+        /* Confidence Pill */
+        .confidence-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            font-size: 0.72rem;
+            color: var(--text-muted);
+            margin-top: 0.6rem;
+            background: var(--bg-card-subtle);
+            border: 1px solid var(--border-main);
+            padding: 0.2rem 0.55rem;
+            border-radius: var(--radius-full);
+            font-weight: 500;
         }
 
         .confidence-bar-outer {
-            width: 60px;
+            width: 48px;
             height: 4px;
-            background: rgba(255, 255, 255, 0.05);
+            background: var(--border-main);
             border-radius: 2px;
             overflow: hidden;
         }
@@ -1237,454 +1545,657 @@ HTML_TEMPLATE = """
             border-radius: 2px;
         }
 
-        /* Formatted Tools UI */
-        .tool-results-container {
-            margin-top: 0.65rem;
+        /* Live Executing State Bubble */
+        .executing-state-container {
             display: flex;
-            flex-direction: column;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.85rem;
+            width: 100%;
+        }
+
+        .executing-label {
+            display: flex;
+            align-items: center;
             gap: 0.5rem;
+            font-size: 0.88rem;
+            font-weight: 600;
+            color: var(--primary);
         }
 
-        .tool-result-item {
-            background: rgba(255, 255, 255, 0.02);
-            border: 1px solid var(--border-subtle);
-            border-radius: 6px;
-            padding: 0.6rem 0.8rem;
-            font-size: 0.85rem;
-            color: #cbd5e1;
+        .spinner-ring {
+            width: 16px;
+            height: 16px;
+            border: 2px solid var(--border-main);
+            border-top: 2px solid var(--primary);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
         }
 
-        .tool-icon {
-            margin-right: 0.4rem;
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
         }
 
-        .tool-result-item ul {
-            margin-left: 1.25rem;
-            margin-top: 0.35rem;
-            display: flex;
-            flex-direction: column;
-            gap: 0.25rem;
-        }
-
-        .tool-result-item li {
-            font-size: 0.8rem;
-            color: #94a3b8;
-        }
-
-        /* Accordion for Raw JSON output */
-        details.raw-json-details {
-            margin-top: 0.5rem;
-            border-top: 1px dashed rgba(255, 255, 255, 0.05);
-            padding-top: 0.4rem;
-        }
-
-        details.raw-json-details summary {
-            font-size: 0.72rem;
-            color: var(--text-muted);
+        .btn-inline-cancel {
+            background: var(--danger-bg);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: var(--danger);
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 0.3rem 0.75rem;
+            border-radius: var(--radius-full);
             cursor: pointer;
-            outline: none;
-            user-select: none;
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+            transition: all 0.15s ease;
+        }
+
+        .btn-inline-cancel:hover {
+            background: var(--danger);
+            color: #ffffff;
+            border-color: var(--danger);
+            box-shadow: 0 2px 6px rgba(239, 68, 68, 0.3);
+        }
+
+        .stop-square {
+            width: 8px;
+            height: 8px;
+            background: currentColor;
+            border-radius: 1px;
             display: inline-block;
         }
 
-        details.raw-json-details summary:hover {
-            color: var(--text-main);
-        }
-
-        details.raw-json-details pre {
-            margin-top: 0.4rem;
-            background: rgba(0, 0, 0, 0.25);
-            border-radius: 4px;
-            padding: 0.5rem;
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 0.72rem;
-            color: #38bdf8;
-            overflow-x: auto;
-            max-height: 150px;
-        }
-
-        .chat-input-area {
-            padding: 1.25rem 1.5rem;
-            border-top: 1px solid var(--border-subtle);
+        /* Cancelled Banner in Bubble */
+        .cancelled-banner {
             display: flex;
-            gap: 0.75rem;
-            background: rgba(14, 16, 27, 0.4);
+            align-items: center;
+            gap: 0.5rem;
+            background: var(--accent-amber-bg);
+            border: 1px solid rgba(217, 119, 6, 0.3);
+            border-radius: var(--radius-sm);
+            padding: 0.55rem 0.85rem;
+            color: var(--accent-amber);
+            font-size: 0.84rem;
+            font-weight: 600;
+        }
+
+        /* Input Area with Action Button */
+        .chat-input-wrapper {
+            padding: 1rem 1.25rem;
+            border-top: 1px solid var(--border-main);
+            background: var(--bg-card);
+            display: flex;
+            gap: 0.65rem;
+            align-items: center;
+        }
+
+        .input-box-container {
+            flex-grow: 1;
+            position: relative;
+            display: flex;
+            align-items: center;
         }
 
         .chat-input {
-            flex-grow: 1;
-            background: rgba(255, 255, 255, 0.03);
-            border: 1px solid var(--border-subtle);
-            border-radius: 8px;
-            padding: 0.75rem 1rem;
-            color: var(--text-main);
+            width: 100%;
+            background: var(--bg-input);
+            border: 1px solid var(--border-main);
+            border-radius: var(--radius-md);
+            padding: 0.78rem 1rem;
+            color: var(--text-primary);
             font-family: inherit;
-            font-size: 0.9rem;
+            font-size: 0.92rem;
             outline: none;
-            transition: all 0.15s;
+            transition: all 0.15s ease;
         }
 
         .chat-input:focus {
-            border-color: var(--primary-light);
-            background: rgba(255, 255, 255, 0.05);
+            border-color: var(--border-focus);
+            box-shadow: 0 0 0 3px var(--primary-glow);
         }
 
-        .send-btn {
-            background: var(--primary);
-            color: #ffffff;
+        /* Dynamic Execute / Stop Button */
+        .btn-action {
+            height: 42px;
             border: none;
-            border-radius: 8px;
+            border-radius: var(--radius-md);
             padding: 0 1.25rem;
-            font-weight: 500;
-            font-size: 0.85rem;
+            font-weight: 600;
+            font-size: 0.88rem;
             cursor: pointer;
-            transition: all 0.15s;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 0.4rem;
+            gap: 0.45rem;
+            white-space: nowrap;
+            user-select: none;
         }
 
-        .send-btn:hover {
-            background: var(--primary-light);
+        .btn-execute {
+            background: var(--primary);
+            color: #ffffff;
+            box-shadow: 0 2px 6px var(--primary-glow);
         }
 
-        /* Right Panel: Tools and Logs */
-        .dashboard-panel {
-            padding: 1.5rem;
+        .btn-execute:hover {
+            background: var(--primary-hover);
+            transform: translateY(-1px);
+        }
+
+        .btn-stop {
+            background: var(--danger);
+            color: #ffffff;
+            box-shadow: 0 2px 8px rgba(239, 68, 68, 0.35);
+            animation: pulse-stop 1.8s infinite;
+        }
+
+        .btn-stop:hover {
+            background: var(--danger-hover);
+            transform: translateY(-1px);
+        }
+
+        @keyframes pulse-stop {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.88; }
+        }
+
+        /* Right Panel: Triggers & Terminal */
+        .sidebar-panel {
+            padding: 1.25rem;
             display: flex;
             flex-direction: column;
-            gap: 1.5rem;
+            gap: 1.25rem;
             overflow-y: auto;
             height: 100%;
+            background: var(--bg-card);
         }
 
-        .panel-section-title {
-            font-size: 0.82rem;
-            font-weight: 600;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.75px;
-            margin-bottom: 0.75rem;
+        .section-header {
             display: flex;
             align-items: center;
-            gap: 0.4rem;
+            justify-content: space-between;
+            margin-bottom: 0.65rem;
         }
 
-        .panel-section-title svg {
-            width: 1rem;
-            height: 1rem;
-            color: var(--primary-light);
+        .section-title {
+            font-size: 0.8rem;
+            font-weight: 700;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+        }
+
+        .category-tabs {
+            display: flex;
+            gap: 0.3rem;
+            overflow-x: auto;
+            padding-bottom: 0.4rem;
+            margin-bottom: 0.65rem;
+        }
+
+        .cat-tab {
+            background: var(--bg-card-subtle);
+            border: 1px solid var(--border-main);
+            color: var(--text-muted);
+            font-size: 0.72rem;
+            font-weight: 600;
+            padding: 0.25rem 0.6rem;
+            border-radius: var(--radius-full);
+            cursor: pointer;
+            white-space: nowrap;
+            transition: all 0.15s ease;
+        }
+
+        .cat-tab.active {
+            background: var(--text-primary);
+            color: var(--bg-card);
+            border-color: var(--text-primary);
         }
 
         .triggers-grid {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
-            gap: 0.6rem;
+            gap: 0.5rem;
+            max-height: 380px;
+            overflow-y: auto;
+            padding-right: 2px;
         }
 
-        .trigger-card {
-            background: rgba(255, 255, 255, 0.02);
-            border: 1px solid var(--border-subtle);
-            border-radius: 8px;
-            padding: 0.75rem;
+        @media (max-width: 480px) {
+            .triggers-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .trigger-item {
+            background: var(--bg-card-subtle);
+            border: 1px solid var(--border-main);
+            border-radius: var(--radius-sm);
+            padding: 0.65rem 0.75rem;
+            color: var(--text-primary);
             font-family: inherit;
-            color: var(--text-main);
-            font-size: 0.8rem;
-            font-weight: 500;
             text-align: left;
             cursor: pointer;
-            transition: all 0.15s;
+            transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
             display: flex;
             flex-direction: column;
             gap: 0.15rem;
         }
 
-        .trigger-card:hover {
-            background: rgba(255, 255, 255, 0.05);
-            border-color: var(--primary-light);
+        .trigger-item:hover {
+            border-color: var(--border-focus);
+            background: var(--primary-light);
+            transform: translateY(-1px);
+            box-shadow: var(--shadow-sm);
         }
 
-        .trigger-card span.tag-label {
+        .trigger-badge {
             font-size: 0.65rem;
             color: var(--text-muted);
+            font-weight: 600;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
+            letter-spacing: 0.3px;
         }
 
-        .terminal-container {
-            background: rgba(0, 0, 0, 0.3);
-            border: 1px solid var(--border-subtle);
-            border-radius: 8px;
+        .trigger-title {
+            font-size: 0.8rem;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        /* Terminal Output Console */
+        .terminal-wrapper {
+            display: flex;
+            flex-direction: column;
+            flex-grow: 1;
+        }
+
+        .terminal-box {
+            background: var(--terminal-bg);
+            border: 1px solid var(--terminal-border);
+            border-radius: var(--radius-md);
             padding: 0.85rem;
             font-family: 'JetBrains Mono', monospace;
-            font-size: 0.75rem;
-            line-height: 1.5;
-            color: #10b981;
-            flex-grow: 1;
+            font-size: 0.74rem;
+            line-height: 1.55;
+            color: var(--terminal-text);
             overflow-y: auto;
-            max-height: 350px;
-            min-height: 200px;
+            min-height: 180px;
+            max-height: 280px;
+            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.2);
         }
 
-        .log-row {
-            margin-bottom: 0.35rem;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.01);
-            padding-bottom: 0.2rem;
+        .log-line {
+            margin-bottom: 0.3rem;
             word-break: break-all;
+            display: flex;
+            gap: 0.35rem;
         }
 
-        .log-time-prefix {
-            color: var(--text-muted);
-            margin-right: 0.4rem;
+        .log-time {
+            color: #64748b;
+            user-select: none;
         }
 
-        .loading-animation {
-            display: inline-flex;
-            gap: 2px;
-            align-items: center;
-        }
-
-        .loading-animation div {
-            width: 4px;
-            height: 4px;
-            background-color: var(--text-muted);
-            border-radius: 50%;
-            animation: wave 1.2s infinite ease-in-out both;
-        }
-
-        .loading-animation div:nth-child(1) { animation-delay: -0.3s; }
-        .loading-animation div:nth-child(2) { animation-delay: -0.15s; }
-
-        @keyframes wave {
-            0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
-            40% { transform: scale(1.2); opacity: 1; }
-        }
+        .log-tag-system { color: #38bdf8; font-weight: 600; }
+        .log-tag-user { color: #a5b4fc; font-weight: 600; }
+        .log-tag-agent { color: #34d399; font-weight: 600; }
+        .log-tag-cancel { color: #fbbf24; font-weight: 600; }
+        .log-tag-error { color: #f87171; font-weight: 600; }
     </style>
 </head>
 <body>
+    <!-- Top Header -->
     <header>
         <div class="header-left">
             <div class="logo-mark">▲</div>
             <div class="logo-text">
-                <h1>Termux Agent Hub</h1>
-                <span id="modelBadge">Needle Core v{{ active_model }}.0</span>
+                <h1>Termux Agent Hub <span class="badge-sub" id="modelBadge">Needle Core v{{ active_model }}.0</span></h1>
             </div>
         </div>
         <div class="header-right">
-            <div class="model-selector-group">
-                <span class="model-label">Model:</span>
-                <button class="model-btn {% if active_model == 3 %}active{% endif %}" id="btnModel3" onclick="selectModel(3)">Needle 3</button>
-                <button class="model-btn {% if active_model == 2 %}active{% endif %}" id="btnModel2" onclick="selectModel(2)">Needle 2</button>
+            <!-- Dynamic Model Selector -->
+            <div class="model-switcher">
+                <button class="model-btn {% if active_model == 3 %}active{% endif %}" id="btnModel3" onclick="selectModel(3)" title="Switch to Needle 3 (Laddered SAN Foundation)">
+                    Needle 3 <span class="pill-badge">SAN</span>
+                </button>
+                <button class="model-btn {% if active_model == 2 %}active{% endif %}" id="btnModel2" onclick="selectModel(2)" title="Switch to Needle 2 (Legacy 14MB Core)">
+                    Needle 2 <span class="pill-badge">14MB</span>
+                </button>
             </div>
-            <div class="status-container">
+
+            <!-- Online Status Pill -->
+            <div class="status-pill">
                 <div class="status-dot"></div>
                 <span>Online</span>
             </div>
+
+            <!-- Light / Dark Mode Toggle -->
+            <button class="theme-toggle-btn" id="themeToggleBtn" onclick="toggleTheme()" title="Toggle Light / Dark Mode">
+                <svg id="themeIconSun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+                <svg id="themeIconMoon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+            </button>
         </div>
     </header>
 
+    <!-- Main Workspace -->
     <main>
-        <!-- Left Panel: Chat Interface -->
-        <div class="card">
-            <div class="chat-layout">
+        <!-- Left: Interactive Chat Console -->
+        <div class="panel-card">
+            <div class="chat-container">
                 <div class="chat-header">
-                    <div class="chat-header-title">Agent Console</div>
-                    <div class="meta-info" style="font-size:0.75rem;">Local Session</div>
+                    <div class="chat-header-info">
+                        <span class="chat-header-title">Agent Console</span>
+                        <span class="chat-header-model" id="chatHeaderMeta">• Needle v{{ active_model }}.0</span>
+                    </div>
+                    <button class="chat-clear-btn" onclick="clearChat()" title="Clear chat history">Clear Chat</button>
                 </div>
-                
+
                 <div class="chat-messages" id="chatMessages">
-                    <div class="message agent">
-                        <div class="bubble">
-                            Welcome. I am the local agentic runtime powered by Needle. You can seamlessly switch between Needle 3 (new) and Needle 2 (legacy) anytime. Provide any system instructions, device actions, or query commands in natural language.
+                    <!-- Welcome Hero Card -->
+                    <div class="welcome-card">
+                        <h3>⚡ On-Device Agentic Assistant</h3>
+                        <p>Powered by Cactus Needle foundation models. Control hardware, inspect sensors, and execute Android actions locally. Type a command or try a quick suggestion below:</p>
+                        <div class="suggestion-chips">
+                            <button class="chip" onclick="submitCommand('Check phone battery status')">🔋 Battery Status</button>
+                            <button class="chip" onclick="submitCommand('Turn on the camera flashlight')">🔦 Flashlight ON</button>
+                            <button class="chip" onclick="submitCommand('What Wi-Fi network are you connected to?')">📶 Wi-Fi Details</button>
+                            <button class="chip" onclick="submitCommand('Get phone GPS location coordinates')">📍 GPS Location</button>
+                            <button class="chip" onclick="submitCommand('Take a camera photo')">📸 Capture Photo</button>
+                            <button class="chip" onclick="submitCommand('Retrieve last 5 text messages')">✉️ Inbox SMS</button>
+                            <button class="chip" onclick="submitCommand('Vibrate the phone for 500ms')">📳 Vibrate</button>
+                            <button class="chip" onclick="submitCommand('Semantically search contacts for doctor or emergency')">🧠 Semantic Search</button>
                         </div>
-                        <div class="meta-info" id="chatHeaderMeta">Agent Core • Needle v{{ active_model }}.0</div>
                     </div>
                 </div>
-                
-                <div class="chat-input-area">
-                    <input type="text" class="chat-input" id="chatInput" placeholder="Enter command or action..." autocomplete="off">
-                    <button class="send-btn" id="sendBtn">
+
+                <!-- Chat Input Area with Dynamic Execute / Stop Button -->
+                <div class="chat-input-wrapper">
+                    <div class="input-box-container">
+                        <input type="text" class="chat-input" id="chatInput" placeholder="Command phone hardware or ask anything... (Press Enter to send)" autocomplete="off">
+                    </div>
+                    <!-- Execute Button (Default) -->
+                    <button class="btn-action btn-execute" id="sendBtn" onclick="handleSendClick()">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
                         <span>Execute</span>
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                    </button>
+                    <!-- Stop / Cancel Button (Visible during execution) -->
+                    <button class="btn-action btn-stop" id="stopBtn" onclick="cancelExecution()" style="display: none;" title="Cancel tool execution (Esc)">
+                        <span class="stop-square"></span>
+                        <span>Stop</span>
                     </button>
                 </div>
             </div>
         </div>
 
-        <!-- Right Panel: Diagnostics & Actions -->
-        <div class="card" style="height: auto;">
-            <div class="dashboard-panel">
+        <!-- Right: Triggers Grid & Developer Output Monitor -->
+        <div class="panel-card sidebar-card">
+            <div class="sidebar-panel">
+                <!-- Device Control Triggers Section -->
                 <div>
-                    <h2 class="panel-section-title">
-                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-                        Device Control Triggers
-                    </h2>
-                    <div class="triggers-grid">
-                        <button class="trigger-card" onclick="submitCommand('Check phone battery status')">
-                            <span class="tag-label">System</span>
-                            <strong>Battery Status</strong>
+                    <div class="section-header">
+                        <span class="section-title">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                            Hardware Triggers
+                        </span>
+                    </div>
+
+                    <!-- Category Filter Tabs -->
+                    <div class="category-tabs" id="categoryTabs">
+                        <button class="cat-tab active" onclick="filterTriggers('all', this)">All</button>
+                        <button class="cat-tab" onclick="filterTriggers('hardware', this)">Hardware</button>
+                        <button class="cat-tab" onclick="filterTriggers('system', this)">System</button>
+                        <button class="cat-tab" onclick="filterTriggers('network', this)">Network</button>
+                        <button class="cat-tab" onclick="filterTriggers('media', this)">Media</button>
+                        <button class="cat-tab" onclick="filterTriggers('needle3', this)">Needle 3</button>
+                    </div>
+
+                    <div class="triggers-grid" id="triggersGrid">
+                        <!-- Battery -->
+                        <button class="trigger-item" data-cat="system" onclick="submitCommand('Check phone battery status')">
+                            <span class="trigger-badge">System</span>
+                            <span class="trigger-title">Battery Status</span>
                         </button>
-                        <button class="trigger-card" onclick="submitCommand('Vibrate the phone for 500ms')">
-                            <span class="tag-label">Hardware</span>
-                            <strong>Haptic Vibrate</strong>
+                        <!-- Torch ON -->
+                        <button class="trigger-item" data-cat="hardware" onclick="submitCommand('Turn on the camera flashlight')">
+                            <span class="trigger-badge">Hardware</span>
+                            <span class="trigger-title">Flashlight ON</span>
                         </button>
-                        <button class="trigger-card" onclick="submitCommand('Turn on the camera flashlight')">
-                            <span class="tag-label">Hardware</span>
-                            <strong>Torch ON</strong>
+                        <!-- Torch OFF -->
+                        <button class="trigger-item" data-cat="hardware" onclick="submitCommand('Turn off the camera flashlight')">
+                            <span class="trigger-badge">Hardware</span>
+                            <span class="trigger-title">Flashlight OFF</span>
                         </button>
-                        <button class="trigger-card" onclick="submitCommand('Turn off the camera flashlight')">
-                            <span class="tag-label">Hardware</span>
-                            <strong>Torch OFF</strong>
+                        <!-- Haptic Vibrate -->
+                        <button class="trigger-item" data-cat="hardware" onclick="submitCommand('Vibrate the phone for 500ms')">
+                            <span class="trigger-badge">Hardware</span>
+                            <span class="trigger-title">Haptic Vibrate</span>
                         </button>
-                        <button class="trigger-card" onclick="submitCommand('What Wi-Fi network are you connected to?')">
-                            <span class="tag-label">Network</span>
-                            <strong>Wi-Fi Details</strong>
+                        <!-- Wi-Fi Connection -->
+                        <button class="trigger-item" data-cat="network" onclick="submitCommand('What Wi-Fi network are you connected to?')">
+                            <span class="trigger-badge">Network</span>
+                            <span class="trigger-title">Wi-Fi Details</span>
                         </button>
-                        <button class="trigger-card" onclick="submitCommand('Get phone GPS location coordinates')">
-                            <span class="tag-label">Location</span>
-                            <strong>GPS Coordinates</strong>
+                        <!-- GPS Coordinates -->
+                        <button class="trigger-item" data-cat="system" onclick="submitCommand('Get phone GPS location coordinates')">
+                            <span class="trigger-badge">Location</span>
+                            <span class="trigger-title">GPS Coordinates</span>
                         </button>
-                        <button class="trigger-card" onclick="submitCommand('List phone contacts')">
-                            <span class="tag-label">Data</span>
-                            <strong>Contacts List</strong>
+                        <!-- Camera Photo -->
+                        <button class="trigger-item" data-cat="media" onclick="submitCommand('Take a camera photo')">
+                            <span class="trigger-badge">Camera</span>
+                            <span class="trigger-title">Capture Photo</span>
                         </button>
-                        <button class="trigger-card" onclick="submitCommand('Retrieve last 5 text messages')">
-                            <span class="tag-label">Messages</span>
-                            <strong>Inbox SMS</strong>
+                        <!-- Screenshot -->
+                        <button class="trigger-item" data-cat="system" onclick="submitCommand('Take a screenshot of the phone screen')">
+                            <span class="trigger-badge">Display</span>
+                            <span class="trigger-title">Screenshot</span>
                         </button>
-                        <button class="trigger-card" onclick="submitCommand('Take a camera photo')">
-                            <span class="tag-label">Camera</span>
-                            <strong>Capture Photo</strong>
+                        <!-- Contacts -->
+                        <button class="trigger-item" data-cat="system" onclick="submitCommand('List phone contacts')">
+                            <span class="trigger-badge">Data</span>
+                            <span class="trigger-title">Contacts List</span>
                         </button>
-                        <button class="trigger-card" onclick="submitCommand('Show a toast saying Agent Runtime Online!')">
-                            <span class="tag-label">Alert</span>
-                            <strong>Trigger Toast</strong>
+                        <!-- SMS Inbox -->
+                        <button class="trigger-item" data-cat="network" onclick="submitCommand('Retrieve last 5 text messages')">
+                            <span class="trigger-badge">Messages</span>
+                            <span class="trigger-title">Inbox SMS</span>
                         </button>
-                        <button class="trigger-card" onclick="submitCommand('Set screen brightness to 150')">
-                            <span class="tag-label">Display</span>
-                            <strong>Brightness (Mid)</strong>
+                        <!-- Volume -->
+                        <button class="trigger-item" data-cat="media" onclick="submitCommand('Get volume levels info')">
+                            <span class="trigger-badge">Audio</span>
+                            <span class="trigger-title">Volume Info</span>
                         </button>
-                        <button class="trigger-card" onclick="submitCommand('Get volume levels info')">
-                            <span class="tag-label">Audio</span>
-                            <strong>Volume Info</strong>
+                        <!-- Set Volume -->
+                        <button class="trigger-item" data-cat="media" onclick="submitCommand('Set music stream volume to 10')">
+                            <span class="trigger-badge">Audio</span>
+                            <span class="trigger-title">Set Volume (10)</span>
                         </button>
-                        <button class="trigger-card" onclick="submitCommand('Set music stream volume to 10')">
-                            <span class="tag-label">Audio</span>
-                            <strong>Set Volume (10)</strong>
+                        <!-- Screen Brightness -->
+                        <button class="trigger-item" data-cat="hardware" onclick="submitCommand('Set screen brightness to 150')">
+                            <span class="trigger-badge">Display</span>
+                            <span class="trigger-title">Brightness (Mid)</span>
                         </button>
-                        <button class="trigger-card" onclick="submitCommand('Share text Hello from Termux Agent!')">
-                            <span class="tag-label">System</span>
-                            <strong>Share Text</strong>
+                        <!-- Toast Alert -->
+                        <button class="trigger-item" data-cat="system" onclick="submitCommand('Show a toast saying Agent Online!')">
+                            <span class="trigger-badge">Alert</span>
+                            <span class="trigger-title">Trigger Toast</span>
                         </button>
-                        <button class="trigger-card" onclick="submitCommand('Show recent call logs')">
-                            <span class="tag-label">Telephony</span>
-                            <strong>Call Logs</strong>
+                        <!-- Open WhatsApp -->
+                        <button class="trigger-item" data-cat="system" onclick="submitCommand('Open whatsapp app')">
+                            <span class="trigger-badge">Apps</span>
+                            <span class="trigger-title">Open WhatsApp</span>
                         </button>
-                        <button class="trigger-card" onclick="submitCommand('Authenticate fingerprint')">
-                            <span class="tag-label">Security</span>
-                            <strong>Fingerprint Auth</strong>
+                        <!-- Open YouTube -->
+                        <button class="trigger-item" data-cat="system" onclick="submitCommand('Open youtube app')">
+                            <span class="trigger-badge">Apps</span>
+                            <span class="trigger-title">Open YouTube</span>
                         </button>
-                        <button class="trigger-card" onclick="submitCommand('Start audio recording to recording.3gp')">
-                            <span class="tag-label">Audio</span>
-                            <strong>Record Start</strong>
+                        <!-- Open Chrome -->
+                        <button class="trigger-item" data-cat="system" onclick="submitCommand('Open chrome app')">
+                            <span class="trigger-badge">Apps</span>
+                            <span class="trigger-title">Open Chrome</span>
                         </button>
-                        <button class="trigger-card" onclick="submitCommand('Stop audio recording')">
-                            <span class="tag-label">Audio</span>
-                            <strong>Record Stop</strong>
+                        <!-- Wi-Fi Scan -->
+                        <button class="trigger-item" data-cat="network" onclick="submitCommand('Scan for nearby wifi networks')">
+                            <span class="trigger-badge">Network</span>
+                            <span class="trigger-title">Wi-Fi Scan</span>
                         </button>
-                        <button class="trigger-card" onclick="submitCommand('Get telephony device info')">
-                            <span class="tag-label">Telephony</span>
-                            <strong>Device Info</strong>
+                        <!-- Wi-Fi ON -->
+                        <button class="trigger-item" data-cat="network" onclick="submitCommand('Turn on device Wi-Fi')">
+                            <span class="trigger-badge">Network</span>
+                            <span class="trigger-title">Wi-Fi ON</span>
                         </button>
-                        <button class="trigger-card" onclick="submitCommand('Scan for nearby wifi networks')">
-                            <span class="tag-label">Network</span>
-                            <strong>Wi-Fi Scan</strong>
+                        <!-- Wi-Fi OFF -->
+                        <button class="trigger-item" data-cat="network" onclick="submitCommand('Turn off device Wi-Fi')">
+                            <span class="trigger-badge">Network</span>
+                            <span class="trigger-title">Wi-Fi OFF</span>
                         </button>
-                        <button class="trigger-card" onclick="submitCommand('Open whatsapp app')">
-                            <span class="tag-label">Apps</span>
-                            <strong>Open WhatsApp</strong>
+                        <!-- Audio Recording -->
+                        <button class="trigger-item" data-cat="media" onclick="submitCommand('Start audio recording to note.3gp')">
+                            <span class="trigger-badge">Audio</span>
+                            <span class="trigger-title">Record Start</span>
                         </button>
-                        <button class="trigger-card" onclick="submitCommand('Open youtube app')">
-                            <span class="tag-label">Apps</span>
-                            <strong>Open YouTube</strong>
+                        <!-- Stop Recording -->
+                        <button class="trigger-item" data-cat="media" onclick="submitCommand('Stop audio recording')">
+                            <span class="trigger-badge">Audio</span>
+                            <span class="trigger-title">Record Stop</span>
                         </button>
-                        <button class="trigger-card" onclick="submitCommand('Open chrome app')">
-                            <span class="tag-label">Apps</span>
-                            <strong>Open Chrome</strong>
+                        <!-- Wake Lock -->
+                        <button class="trigger-item" data-cat="hardware" onclick="submitCommand('Acquire CPU wake lock')">
+                            <span class="trigger-badge">Power</span>
+                            <span class="trigger-title">Wake Lock</span>
                         </button>
-                        <button class="trigger-card" onclick="submitCommand('Take a screenshot of the phone screen')">
-                            <span class="tag-label">Display</span>
-                            <strong>Take Screenshot</strong>
+                        <!-- NFC Scan -->
+                        <button class="trigger-item" data-cat="hardware" onclick="submitCommand('Scan for nearby NFC tags')">
+                            <span class="trigger-badge">NFC</span>
+                            <span class="trigger-title">Scan NFC</span>
                         </button>
-                        <button class="trigger-card" onclick="submitCommand('Read live phone hardware sensors data')">
-                            <span class="tag-label">Sensors</span>
-                            <strong>Hardware Sensors</strong>
+                        <!-- Needle 3 Semantic Search -->
+                        <button class="trigger-item" data-cat="needle3" onclick="submitCommand('Semantically search contacts for doctor or emergency')">
+                            <span class="trigger-badge" style="color:var(--primary);">Needle 3</span>
+                            <span class="trigger-title">Semantic Search</span>
                         </button>
-                        <button class="trigger-card" onclick="submitCommand('Turn on device Wi-Fi')">
-                            <span class="tag-label">Network</span>
-                            <strong>Wi-Fi ON</strong>
-                        </button>
-                        <button class="trigger-card" onclick="submitCommand('Turn off device Wi-Fi')">
-                            <span class="tag-label">Network</span>
-                            <strong>Wi-Fi OFF</strong>
-                        </button>
-                        <button class="trigger-card" onclick="submitCommand('Get audio hardware routing info')">
-                            <span class="tag-label">Audio</span>
-                            <strong>Headset / Audio</strong>
-                        </button>
-                        <button class="trigger-card" onclick="submitCommand('Check cellular tower cellinfo')">
-                            <span class="tag-label">Telephony</span>
-                            <strong>Cell Tower Info</strong>
-                        </button>
-                        <button class="trigger-card" onclick="submitCommand('Acquire CPU wake lock')">
-                            <span class="tag-label">Power</span>
-                            <strong>Wake Lock</strong>
-                        </button>
-                        <button class="trigger-card" onclick="submitCommand('Scan for nearby NFC tags')">
-                            <span class="tag-label">NFC</span>
-                            <strong>Scan NFC</strong>
-                        </button>
-                        <button class="trigger-card" onclick="submitCommand('Semantically search contacts for doctor or emergency')">
-                            <span class="tag-label">Needle 3</span>
-                            <strong>Semantic Search</strong>
-                        </button>
-                        <button class="trigger-card" onclick="submitCommand('Extract contact info from: Call Alex Vance at +15550199 alex@city17.org')">
-                            <span class="tag-label">Needle 3</span>
-                            <strong>Extract Info</strong>
+                        <!-- Needle 3 Structured Extraction -->
+                        <button class="trigger-item" data-cat="needle3" onclick="submitCommand('Extract contact info from: Call Alex Vance at +15550199 alex@city17.org')">
+                            <span class="trigger-badge" style="color:var(--primary);">Needle 3</span>
+                            <span class="trigger-title">Structured Extract</span>
                         </button>
                     </div>
                 </div>
 
-                <div style="flex-grow: 1; display: flex; flex-direction: column;">
-                    <h2 class="panel-section-title">
-                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-                        Terminal Output Monitor
-                    </h2>
-                    <div class="terminal-container" id="terminalLogs">
-                        <div class="log-row"><span class="log-time-prefix">[System]</span> Production WSGI server active.</div>
-                        <div class="log-row" id="initialModelLog"><span class="log-time-prefix">[System]</span> Active model: Needle v{{ active_model }}.0 Core.</div>
+                <!-- Terminal Output Section -->
+                <div class="terminal-wrapper">
+                    <div class="section-header">
+                        <span class="section-title">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
+                            Terminal Monitor
+                        </span>
+                        <button class="chat-clear-btn" onclick="clearTerminal()" style="font-size:0.7rem;">Clear Logs</button>
+                    </div>
+                    <div class="terminal-box" id="terminalLogs">
+                        <div class="log-line"><span class="log-time">[System]</span> <span class="log-tag-system">READY:</span> Termux Agent Runtime Active.</div>
+                        <div class="log-line" id="initialModelLog"><span class="log-time">[System]</span> <span class="log-tag-system">MODEL:</span> Needle v{{ active_model }}.0 Engine loaded.</div>
                     </div>
                 </div>
             </div>
         </div>
     </main>
 
+    <!-- Client Logic & Cancellation Controller -->
     <script>
         const chatMessages = document.getElementById('chatMessages');
         const chatInput = document.getElementById('chatInput');
         const sendBtn = document.getElementById('sendBtn');
+        const stopBtn = document.getElementById('stopBtn');
         const terminalLogs = document.getElementById('terminalLogs');
 
+        // State tracking for cancellation
+        let isExecuting = false;
+        let activeAbortController = null;
+        let currentRequestId = null;
+        let currentLoadingElement = null;
+
+        // Theme Management (Defaults to Light Mode)
+        function initTheme() {
+            const savedTheme = localStorage.getItem('needle_theme') || 'light';
+            setTheme(savedTheme);
+        }
+
+        function toggleTheme() {
+            const current = document.documentElement.getAttribute('data-theme') || 'light';
+            const next = current === 'light' ? 'dark' : 'light';
+            setTheme(next);
+        }
+
+        function setTheme(theme) {
+            document.documentElement.setAttribute('data-theme', theme);
+            localStorage.setItem('needle_theme', theme);
+            const sun = document.getElementById('themeIconSun');
+            const moon = document.getElementById('themeIconMoon');
+            if (sun && moon) {
+                if (theme === 'dark') {
+                    sun.style.display = 'block';
+                    moon.style.display = 'none';
+                } else {
+                    sun.style.display = 'none';
+                    moon.style.display = 'block';
+                }
+            }
+        }
+        initTheme();
+
+        // Terminal Logging
         function appendLog(tag, message) {
             const row = document.createElement('div');
-            row.className = 'log-row';
-            const time = new Date().toLocaleTimeString();
-            row.innerHTML = `<span class="log-time-prefix">[${time}][${tag}]</span> ${message}`;
+            row.className = 'log-line';
+            const time = new Date().toLocaleTimeString([], { hour12: false });
+            let tagClass = 'log-tag-system';
+            if (tag === 'User') tagClass = 'log-tag-user';
+            else if (tag === 'Agent') tagClass = 'log-tag-agent';
+            else if (tag === 'Cancelled') tagClass = 'log-tag-cancel';
+            else if (tag === 'Error') tagClass = 'log-tag-error';
+
+            row.innerHTML = `<span class="log-time">[${time}]</span> <span class="${tagClass}">[${tag}]</span> <span>${message}</span>`;
             terminalLogs.appendChild(row);
             terminalLogs.scrollTop = terminalLogs.scrollHeight;
         }
 
+        function clearTerminal() {
+            terminalLogs.innerHTML = `<div class="log-line"><span class="log-time">[System]</span> Log cleared.</div>`;
+        }
+
+        function clearChat() {
+            chatMessages.innerHTML = `
+                <div class="welcome-card">
+                    <h3>⚡ Chat Cleared</h3>
+                    <p>Ready for your next instruction. Type a command below or tap a quick hardware trigger.</p>
+                </div>
+            `;
+            appendLog('System', 'Chat session cleared.');
+        }
+
+        // Category Trigger Filter
+        function filterTriggers(category, btn) {
+            document.querySelectorAll('.cat-tab').forEach(t => t.classList.remove('active'));
+            btn.classList.add('active');
+            const items = document.querySelectorAll('.trigger-item');
+            items.forEach(item => {
+                if (category === 'all' || item.getAttribute('data-cat') === category) {
+                    item.style.display = 'flex';
+                } else {
+                    item.style.display = 'none';
+                }
+            });
+        }
+
+        // Switch Model (Needle 3 / Needle 2)
         async function selectModel(gen) {
             try {
                 appendLog('System', `Switching active model to Needle ${gen}...`);
@@ -1702,8 +2213,8 @@ HTML_TEMPLATE = """
                     const badge = document.getElementById('modelBadge');
                     if (badge) badge.innerText = `Needle Core v${data.active_generation}.0`;
                     const chatMeta = document.getElementById('chatHeaderMeta');
-                    if (chatMeta) chatMeta.innerText = `Agent Core • Needle v${data.active_generation}.0`;
-                    appendLog('System', `Model switched to Needle ${data.active_generation} (${data.description})`);
+                    if (chatMeta) chatMeta.innerText = `• Needle v${data.active_generation}.0`;
+                    appendLog('System', `Active model switched to Needle ${data.active_generation} (${data.description})`);
                 } else {
                     appendLog('Error', `Failed to switch model: ${data.error || 'Unknown error'}`);
                 }
@@ -1712,101 +2223,250 @@ HTML_TEMPLATE = """
             }
         }
 
-        // Custom parser for rendering pretty tool outputs in chat bubbles
+        // UI State: Toggle between Running (Stop button) and Idle (Execute button)
+        function setExecutionState(running) {
+            isExecuting = running;
+            if (running) {
+                sendBtn.style.display = 'none';
+                stopBtn.style.display = 'flex';
+                chatInput.disabled = true;
+            } else {
+                sendBtn.style.display = 'flex';
+                stopBtn.style.display = 'none';
+                chatInput.disabled = false;
+                chatInput.focus();
+                activeAbortController = null;
+                currentRequestId = null;
+                currentLoadingElement = null;
+            }
+        }
+
+        // Cancel Execution (invoked by Stop button, inline bubble button, or Esc key)
+        async function cancelExecution() {
+            if (!isExecuting) return;
+
+            appendLog('Cancelled', 'Cancel requested by user. Aborting active execution...');
+
+            // Abort fetch immediately
+            if (activeAbortController) {
+                activeAbortController.abort();
+            }
+
+            // Tell server to kill any active subprocess/thread
+            if (currentRequestId) {
+                try {
+                    fetch('/api/cancel', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ request_id: currentRequestId })
+                    }).catch(() => {});
+                } catch (e) {}
+            }
+
+            // Replace loading element with cancelled status banner
+            if (currentLoadingElement && currentLoadingElement.parentNode) {
+                currentLoadingElement.innerHTML = `
+                    <div class="bubble">
+                        <div class="cancelled-banner">
+                            <span class="stop-square" style="background:var(--accent-amber);"></span>
+                            <span>Tool execution cancelled by user.</span>
+                        </div>
+                    </div>
+                    <div class="message-meta">Execution Stopped</div>
+                `;
+            }
+
+            setExecutionState(false);
+            appendLog('Cancelled', 'Execution successfully halted.');
+        }
+
+        // Format tool output into beautiful card components
         function formatToolResult(res) {
             if (!res) return '';
             if (typeof res === 'string') {
-                if (res.toLowerCase().includes('screenshot')) {
+                if (res.includes('[Execution Cancelled')) {
                     return `
-                        <div class="tool-result-item">
-                            <span class="tool-icon">📸</span> <strong>Screenshot Captured:</strong>
-                            <div style="margin-top: 0.5rem;"><img src="/screenshot.png?t=${Date.now()}" style="max-width: 100%; max-height: 250px; border-radius: 6px; border: 1px solid var(--border-subtle);" alt="Screenshot"></div>
-                            <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">${res}</div>
+                        <div class="cancelled-banner">
+                            <span class="stop-square" style="background:var(--accent-amber);"></span>
+                            <span>${res}</span>
                         </div>
                     `;
                 }
-                return `<div class="tool-result-item"><span class="tool-icon">⚡</span> ${res}</div>`;
+                if (res.toLowerCase().includes('screenshot')) {
+                    return `
+                        <div class="tool-card">
+                            <div class="tool-card-header">📸 Screenshot Captured</div>
+                            <div class="tool-card-body">
+                                <div style="margin-top:0.4rem;"><img src="/screenshot.png?t=${Date.now()}" style="max-width:100%; max-height:220px; border-radius:8px; border:1px solid var(--border-main);" alt="Screenshot"></div>
+                                <div style="font-size:0.75rem; color:var(--text-muted); margin-top:0.3rem;">${res}</div>
+                            </div>
+                        </div>
+                    `;
+                }
+                return `
+                    <div class="tool-card">
+                        <div class="tool-card-header">⚡ Device Action Output</div>
+                        <div class="tool-card-body">${res}</div>
+                    </div>
+                `;
             }
+
+            // Battery object
             if (res.percentage !== undefined) {
                 return `
-                    <div class="tool-result-item">
-                        <span class="tool-icon">🔋</span> 
-                        <strong>Battery Status:</strong> ${res.percentage}% (${res.status}, Temp: ${res.temperature}°C, Health: ${res.health})
+                    <div class="tool-card">
+                        <div class="tool-card-header">🔋 Battery Diagnostic</div>
+                        <div class="tool-card-body">
+                            <div class="tool-stat-grid">
+                                <div class="stat-item">
+                                    <div class="stat-label">Charge Level</div>
+                                    <div class="stat-value" style="color:var(--accent-green);">${res.percentage}%</div>
+                                </div>
+                                <div class="stat-item">
+                                    <div class="stat-label">Status</div>
+                                    <div class="stat-value">${res.status || 'Discharging'}</div>
+                                </div>
+                                <div class="stat-item">
+                                    <div class="stat-label">Health</div>
+                                    <div class="stat-value">${res.health || 'GOOD'}</div>
+                                </div>
+                                <div class="stat-item">
+                                    <div class="stat-label">Temperature</div>
+                                    <div class="stat-value">${res.temperature}°C</div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 `;
             }
+
+            // Wi-Fi object
             if (res.ssid !== undefined) {
                 return `
-                    <div class="tool-result-item">
-                        <span class="tool-icon">📶</span> 
-                        <strong>Wi-Fi Details:</strong> Connected to "${res.ssid}" (IP: ${res.ip}, RSSI: ${res.rssi}dBm)
+                    <div class="tool-card">
+                        <div class="tool-card-header">📶 Wi-Fi Connection</div>
+                        <div class="tool-card-body">
+                            <div class="tool-stat-grid">
+                                <div class="stat-item">
+                                    <div class="stat-label">SSID</div>
+                                    <div class="stat-value">${res.ssid}</div>
+                                </div>
+                                <div class="stat-item">
+                                    <div class="stat-label">IP Address</div>
+                                    <div class="stat-value">${res.ip || '192.168.1.102'}</div>
+                                </div>
+                                <div class="stat-item">
+                                    <div class="stat-label">Signal Strength</div>
+                                    <div class="stat-value">${res.rssi !== undefined ? res.rssi + ' dBm' : 'Strong'}</div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 `;
             }
+
+            // Location object
             if (res.latitude !== undefined) {
                 return `
-                    <div class="tool-result-item">
-                        <span class="tool-icon">📍</span> 
-                        <strong>GPS Location:</strong> Latitude: ${res.latitude.toFixed(5)}, Longitude: ${res.longitude.toFixed(5)} (Altitude: ${res.altitude}m)
+                    <div class="tool-card">
+                        <div class="tool-card-header">📍 GPS Coordinates</div>
+                        <div class="tool-card-body">
+                            <div class="tool-stat-grid">
+                                <div class="stat-item">
+                                    <div class="stat-label">Latitude</div>
+                                    <div class="stat-value">${res.latitude.toFixed(5)}</div>
+                                </div>
+                                <div class="stat-item">
+                                    <div class="stat-label">Longitude</div>
+                                    <div class="stat-value">${res.longitude.toFixed(5)}</div>
+                                </div>
+                                <div class="stat-item">
+                                    <div class="stat-label">Altitude</div>
+                                    <div class="stat-value">${res.altitude ? res.altitude + 'm' : 'N/A'}</div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 `;
             }
+
+            // Array outputs (SMS, Contacts)
             if (Array.isArray(res)) {
                 if (res.length === 0) {
-                    return `<div class="tool-result-item"><span class="tool-icon">📁</span> <strong>List Output:</strong> Empty list returned.</div>`;
+                    return `<div class="tool-card"><div class="tool-card-header">📁 Query Result</div><div class="tool-card-body">Empty list returned.</div></div>`;
                 }
                 if (res[0].address !== undefined) {
-                    // SMS list
-                    let html = `<div class="tool-result-item"><span class="tool-icon">✉️</span> <strong>Recent SMS Inbox:</strong><ul>`;
+                    let html = `<div class="tool-card"><div class="tool-card-header">✉️ Inbox Messages (${res.length})</div><div class="tool-card-body"><ul style="margin-left:1.1rem; display:flex; flex-direction:column; gap:0.35rem; margin-top:0.3rem;">`;
                     res.forEach(sms => {
-                        html += `<li><strong>${sms.address}</strong>: "${sms.body}" <span class="meta-info">(${sms.date})</span></li>`;
+                        html += `<li><strong>${sms.address}</strong>: "${sms.body}" <span style="font-size:0.7rem; color:var(--text-muted);">(${sms.date})</span></li>`;
                     });
-                    html += `</ul></div>`;
+                    html += `</ul></div></div>`;
                     return html;
                 }
                 if (res[0].name !== undefined) {
-                    // Contacts list
-                    let html = `<div class="tool-result-item"><span class="tool-icon">👤</span> <strong>Contacts Found:</strong><ul>`;
+                    let html = `<div class="tool-card"><div class="tool-card-header">👤 Contacts Found (${res.length})</div><div class="tool-card-body"><ul style="margin-left:1.1rem; display:flex; flex-direction:column; gap:0.35rem; margin-top:0.3rem;">`;
                     res.forEach(c => {
                         html += `<li><strong>${c.name}</strong>: ${c.number}</li>`;
                     });
-                    html += `</ul></div>`;
+                    html += `</ul></div></div>`;
                     return html;
                 }
             }
+
             // Standard JSON fallback
             return `
-                <div class="tool-result-item">
-                    <span class="tool-icon">⚙️</span> <strong>System Output:</strong>
-                    <pre style="font-family: inherit; font-size: 0.75rem; margin-top: 0.25rem;">${JSON.stringify(res, null, 2)}</pre>
+                <div class="tool-card">
+                    <div class="tool-card-header">⚙️ System Output</div>
+                    <div class="tool-card-body">
+                        <pre style="font-family:'JetBrains Mono', monospace; font-size:0.75rem; overflow-x:auto;">${JSON.stringify(res, null, 2)}</pre>
+                    </div>
                 </div>
             `;
         }
 
+        // Execute Command
         async function submitCommand(text) {
             text = text.trim();
-            if (!text) return;
+            if (!text || isExecuting) return;
 
-            // User message bubble
+            // Generate unique request ID and AbortController for cancelability
+            currentRequestId = 'req_' + Date.now();
+            activeAbortController = new AbortController();
+
+            // Set UI to running state (Execute -> Stop button)
+            setExecutionState(true);
+
+            // User bubble
             const userDiv = document.createElement('div');
             userDiv.className = 'message user';
             userDiv.innerHTML = `
                 <div class="bubble">${text}</div>
-                <div class="meta-info">You</div>
+                <div class="message-meta">You</div>
             `;
             chatMessages.appendChild(userDiv);
             chatMessages.scrollTop = chatMessages.scrollHeight;
 
-            // Loading state bubble
+            // Agent Loading Bubble with Cancel Button right inside it
             const loadingDiv = document.createElement('div');
             loadingDiv.className = 'message agent';
             loadingDiv.innerHTML = `
                 <div class="bubble">
-                    Executing <div class="loading-animation"><div></div><div></div><div></div></div>
+                    <div class="executing-state-container">
+                        <div class="executing-label">
+                            <div class="spinner-ring"></div>
+                            <span>Executing actions with Needle...</span>
+                        </div>
+                        <button class="btn-inline-cancel" onclick="cancelExecution()" title="Cancel this execution">
+                            <span class="stop-square"></span>
+                            <span>Cancel</span>
+                        </button>
+                    </div>
                 </div>
+                <div class="message-meta">Running Tools</div>
             `;
             chatMessages.appendChild(loadingDiv);
             chatMessages.scrollTop = chatMessages.scrollHeight;
+            currentLoadingElement = loadingDiv;
 
             appendLog('User', `Executing: "${text}"`);
 
@@ -1814,7 +2474,8 @@ HTML_TEMPLATE = """
                 const response = await fetch('/api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message: text })
+                    body: JSON.stringify({ message: text, request_id: currentRequestId }),
+                    signal: activeAbortController.signal
                 });
 
                 const data = await response.json();
@@ -1824,17 +2485,22 @@ HTML_TEMPLATE = """
                 agentDiv.className = 'message agent';
 
                 let bubbleContent = '';
-                if (data.type === 'respond' || data.type === 'call') {
+                if (data.type === 'cancelled') {
+                    bubbleContent = `
+                        <div class="cancelled-banner">
+                            <span class="stop-square" style="background:var(--accent-amber);"></span>
+                            <span>${data.reasoning || 'Execution cancelled by user.'}</span>
+                        </div>
+                    `;
+                } else if (data.type === 'respond' || data.type === 'call') {
                     if (data.results && data.results.length > 0) {
                         bubbleContent += `<div class="tool-results-container">`;
-                        data.results.forEach((res, i) => {
+                        data.results.forEach((res) => {
                             bubbleContent += formatToolResult(res);
-                            
-                            // Collapsible details for raw JSON
                             if (typeof res === 'object') {
                                 bubbleContent += `
                                     <details class="raw-json-details">
-                                        <summary>View raw JSON</summary>
+                                        <summary>Inspect Raw JSON</summary>
                                         <pre>${JSON.stringify(res, null, 2)}</pre>
                                     </details>
                                 `;
@@ -1842,29 +2508,29 @@ HTML_TEMPLATE = """
                         });
                         bubbleContent += `</div>`;
                     } else {
-                        bubbleContent += `<p style="color: var(--text-muted);">No matching tools were executed. Please rephrase the command.</p>`;
+                        bubbleContent += `<p style="color:var(--text-muted);">No matching tools were executed. Please rephrase the command.</p>`;
                     }
                 } else {
-                    bubbleContent += `<p style="color: #ef4444;">Runtime execution failure: ${data.error || 'Unknown error'}</p>`;
+                    bubbleContent += `<p style="color:var(--danger); font-weight:600;">Execution failure: ${data.error || 'Unknown error'}</p>`;
                 }
 
-                // Add reasoning
+                // Reasoning accordion
                 let reasoningHtml = '';
-                if (data.reasoning) {
+                if (data.reasoning && data.type !== 'cancelled') {
                     reasoningHtml = `
                         <div class="reasoning-box">
-                            <div class="reasoning-title">
-                                <svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path></svg>
-                                reasoning
+                            <div class="reasoning-header">
+                                <svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path></svg>
+                                Reasoning
                             </div>
                             <p>${data.reasoning}</p>
                         </div>
                     `;
                 }
 
-                // Add confidence bar
+                // Confidence indicator
                 let confidenceHtml = '';
-                if (data.confidence !== null && data.confidence !== undefined) {
+                if (data.confidence !== null && data.confidence !== undefined && data.type !== 'cancelled') {
                     const pct = Math.round(data.confidence * 100);
                     confidenceHtml = `
                         <div class="confidence-indicator">
@@ -1882,45 +2548,59 @@ HTML_TEMPLATE = """
                         ${reasoningHtml}
                         ${confidenceHtml}
                     </div>
-                    <div class="meta-info">${data.model || 'Agent Core'}</div>
+                    <div class="message-meta">${data.model || 'Agent Core'} • Ready</div>
                 `;
 
                 chatMessages.appendChild(agentDiv);
                 chatMessages.scrollTop = chatMessages.scrollHeight;
 
-                if (data.results && data.results.length > 0) {
-                    appendLog('Agent', `Executed ${data.results.length} action(s).`);
+                if (data.type === 'cancelled') {
+                    appendLog('Cancelled', 'Execution was stopped.');
+                } else if (data.results && data.results.length > 0) {
+                    appendLog('Agent', `Completed ${data.results.length} action(s).`);
                 } else {
-                    appendLog('Agent', `No actions run (Reasoning: "${data.reasoning || 'Low confidence'}").`);
+                    appendLog('Agent', `Completed without actions (Reasoning: "${data.reasoning || 'Low confidence'}").`);
                 }
 
             } catch (err) {
+                if (err.name === 'AbortError') {
+                    // Handled gracefully in cancelExecution()
+                    return;
+                }
                 loadingDiv.remove();
                 const errDiv = document.createElement('div');
                 errDiv.className = 'message agent';
                 errDiv.innerHTML = `
-                    <div class="bubble" style="color: #ef4444;">
-                        Failed to connect to agent server. Check connection.
+                    <div class="bubble" style="color:var(--danger); border-color:var(--danger);">
+                        Failed to connect to agent server. Verify Termux proot environment.
                     </div>
-                    <div class="meta-info">Runtime Error</div>
+                    <div class="message-meta">Connection Error</div>
                 `;
                 chatMessages.appendChild(errDiv);
                 chatMessages.scrollTop = chatMessages.scrollHeight;
                 appendLog('Error', `Network fail: ${err.message}`);
+            } finally {
+                setExecutionState(false);
             }
         }
 
-        sendBtn.addEventListener('click', () => {
+        function handleSendClick() {
             const val = chatInput.value;
             chatInput.value = '';
             submitCommand(val);
+        }
+
+        // Enter key to submit, Escape key to Cancel/Stop execution
+        chatInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                handleSendClick();
+            }
         });
 
-        chatInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                const val = chatInput.value;
-                chatInput.value = '';
-                submitCommand(val);
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && isExecuting) {
+                cancelExecution();
             }
         });
     </script>
@@ -2034,19 +2714,77 @@ def model_api():
             "available": [2, 3]
         })
 
+@app.route("/api/cancel", methods=["POST"])
+def cancel_api():
+    try:
+        data = request.get_json() or {}
+        req_id = data.get("request_id")
+        with active_requests_lock:
+            if req_id and req_id in active_requests:
+                active_requests[req_id]["cancelled"] = True
+                proc = active_requests[req_id].get("proc")
+                if proc and proc.poll() is None:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                return jsonify({"status": "ok", "message": f"Execution '{req_id}' cancelled."})
+            else:
+                for r in active_requests.values():
+                    r["cancelled"] = True
+                    proc = r.get("proc")
+                    if proc and proc.poll() is None:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                return jsonify({"status": "ok", "message": "All active executions cancelled."})
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
+
 @app.route("/api/chat", methods=["POST"])
 def chat_api():
+    req_id = None
     try:
         data = request.get_json() or {}
         user_message = data.get("message", "").strip()
+        req_id = data.get("request_id") or f"req_{int(time.time() * 1000)}"
         if not user_message:
             return jsonify({"type": "error", "error": "Empty message parameter"}), 400
         
+        with active_requests_lock:
+            active_requests[req_id] = {"cancelled": False, "proc": None, "start": time.time()}
+        
+        _current_req_id.id = req_id
+
         # Preprocess query to wrap speech commands in quotes for correct parsing by Needle LLM
         processed_message = preprocess_query(user_message)
-        # Invoke Needle model agent loop
         current_agent = get_agent()
+        
+        if is_current_request_cancelled():
+            return jsonify({
+                "query": user_message,
+                "model": f"Needle {active_generation}",
+                "generation": active_generation,
+                "type": "cancelled",
+                "reasoning": "Execution was cancelled by the user.",
+                "confidence": 0,
+                "results": ["[Execution Cancelled by User]"]
+            })
+
+        # Invoke Needle model agent loop
         res = current_agent.run(processed_message)
+
+        if is_current_request_cancelled():
+            return jsonify({
+                "query": user_message,
+                "model": f"Needle {active_generation}",
+                "generation": active_generation,
+                "type": "cancelled",
+                "reasoning": "Execution was cancelled by the user.",
+                "confidence": 0,
+                "results": ["[Execution Cancelled by User]"]
+            })
         
         return jsonify({
             "query": user_message,
@@ -2061,6 +2799,10 @@ def chat_api():
     except Exception as e:
         print(f"Exception during api/chat processing: {e}", file=sys.stderr)
         return jsonify({"type": "error", "error": str(e)}), 500
+    finally:
+        if req_id:
+            with active_requests_lock:
+                active_requests.pop(req_id, None)
 
 # Telegram Bot Daemon Runner
 def start_telegram_bot(token):
